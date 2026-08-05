@@ -42,6 +42,29 @@ log = get_logger(__name__)
 _MIN_PROCESSES_FOR_CLASSIFICATION = 3
 
 
+def _isolation_model_path(model_path: Path) -> Path:
+    """Derive the companion IsolationForest path for a classifier model path.
+
+    Mirrors ``_isolation_output_path`` in the training script so inference
+    finds the same companion file the trainer produces, even for custom
+    classifier filenames.
+
+    Args:
+        model_path: Path to the calibrated classifier model.
+
+    Returns:
+        Companion ``<stem>_isolation.joblib`` path for the IsolationForest.
+    """
+    stem = model_path.stem
+    if stem.endswith("_model"):
+        iso_stem = stem[: -len("_model")] + "_isolation"
+    elif stem.endswith("_isolation"):
+        iso_stem = stem
+    else:
+        iso_stem = f"{stem}_isolation"
+    return model_path.with_name(f"{iso_stem}.joblib")
+
+
 class ForensiqClassifier(BaseClassifier):
     """XGBoost-based malware classifier for Windows process feature vectors.
 
@@ -106,9 +129,7 @@ class ForensiqClassifier(BaseClassifier):
             ) from exc
 
         # Try to load the IsolationForest model (same dir, *_isolation.joblib)
-        isolation_path = path.with_name(
-            path.stem.replace("forensiq_model", "forensiq_isolation") + ".joblib"
-        )
+        isolation_path = _isolation_model_path(path)
         if not isolation_path.exists():
             # Fallback: look for any *_isolation*.joblib in the same directory
             candidates = sorted(path.parent.glob("*isolation*.joblib"), reverse=True)

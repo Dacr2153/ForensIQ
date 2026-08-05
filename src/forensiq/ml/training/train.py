@@ -79,7 +79,8 @@ FEATURE_TO_DATASET_COL: dict[str, str | None] = {
     "handle_count": "handles.avg_handles_per_proc",
     "has_encoded_cmdline": "ldrmodules.not_in_mem",
     # New v2 features
-    "vad_execute_write_page_count": "malfind.ninjections",  # page count proxy (re-use injection count)
+    # Page count proxy (re-use injection count)
+    "vad_execute_write_page_count": "malfind.ninjections",
     "parent_name_mismatch": "psxview.not_in_csrss",  # hidden from csrss → spoofed parent
     "thread_start_in_heap": "malfind.uniqueInjections",  # injected regions ≈ heap-started threads
     "import_table_entropy": "dlllist.ndlls",  # DLL diversity → import entropy proxy
@@ -234,6 +235,30 @@ def load_dataset(data_path: Path) -> tuple[pd.DataFrame, pd.Series]:
     X = pd.DataFrame(feature_data, index=df.index)
     print(f"\nFeature matrix shape: {X.shape}")
     return X, labels
+
+
+def _isolation_output_path(model_output: Path) -> Path:
+    """Derive the IsolationForest output path from the classifier model path.
+
+    Ensures the isolation model never collides with the classifier model even
+    when the classifier uses a custom filename (the old ``.replace`` approach
+    only worked for the default ``forensiq_model.joblib`` name and silently
+    overwrote the classifier with an IsolationForest otherwise).
+
+    Args:
+        model_output: Path the calibrated classifier is saved to.
+
+    Returns:
+        Companion ``<stem>_isolation.joblib`` path for the IsolationForest.
+    """
+    stem = model_output.stem
+    if stem.endswith("_model"):
+        iso_stem = stem[: -len("_model")] + "_isolation"
+    elif stem.endswith("_isolation"):
+        iso_stem = stem
+    else:
+        iso_stem = f"{stem}_isolation"
+    return model_output.with_name(f"{iso_stem}.joblib")
 
 
 def train_model(
@@ -409,9 +434,7 @@ def main() -> int:
     save_model(model, args.output, metrics, FEATURE_NAMES)
 
     # ── Train IsolationForest on benign samples only ──────────────────────────
-    iso_output = args.output.with_name(
-        args.output.stem.replace("forensiq_model", "forensiq_isolation") + ".joblib"
-    )
+    iso_output = _isolation_output_path(args.output)
     print("\nTraining IsolationForest on benign samples (unsupervised anomaly detector)...")
     # Use all benign training samples for IsolationForest — it learns the normal profile
     X_benign = X_train[y_train == 0]
