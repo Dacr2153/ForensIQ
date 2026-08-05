@@ -1,0 +1,205 @@
+# FILE: pyproject.toml
+# ForensIQ — Memory Forensics & Threat Hunting Platform
+# PEP 517/518 project configuration
+
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "forensiq"
+version = "1.0.0"
+description = "Memory Forensics & Threat Hunting Platform — DFIR tool for fileless malware detection in Windows memory dumps"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.12"
+authors = [{ name = "ForensIQ Team" }]
+keywords = [
+    "forensics", "memory-analysis", "threat-hunting",
+    "malware-detection", "yara", "xgboost", "dfir",
+    "volatility3", "fileless-malware"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Information Technology",
+    "Topic :: Security",
+    "Topic :: System :: Monitoring",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Environment :: Console",
+]
+
+dependencies = [
+    # ── ML & Data Science ───────────────────────────────────────────────────
+    "xgboost==3.2.0",
+    "scikit-learn==1.8.0",
+    "shap==0.51.0",
+    "optuna==4.8.0",
+    "matplotlib==3.10.9",
+    "numpy==2.4.4",
+    "pandas==3.0.2",
+    "joblib==1.5.3",
+    # ── Data Validation & Settings ──────────────────────────────────────────
+    "pydantic==2.13.3",
+    "pydantic-settings==2.14.0",
+    # ── CLI & Terminal UI ────────────────────────────────────────────────────
+    "typer==0.25.1",
+    "rich==15.0.0",
+    # ── HTTP Client (Ollama API) ─────────────────────────────────────────────
+    "httpx==0.28.1",
+    # ── Templating & Reporting ───────────────────────────────────────────────
+    "jinja2==3.1.6",
+    "beautifulsoup4==4.14.3",
+    # ── Memory Forensics ────────────────────────────────────────────────────
+    # NOTE: volatility3 requires Python 3.12+ and a working pefile/capstone
+    "volatility3==2.28.0",
+    # NOTE: yara-python requires the yara system library (libyara-dev / yara package)
+    #       On Arch Linux: sudo pacman -S yara
+    #       On Debian/Ubuntu: sudo apt-get install libyara-dev
+    "yara-python==4.5.4",
+    # ── Structured Logging ──────────────────────────────────────────────────
+    "structlog==25.5.0",
+    # ── Threat Intelligence Standards ───────────────────────────────────────
+    "stix2==3.0.2",
+    # ── Interactive TUI ─────────────────────────────────────────────────────
+    "questionary==2.1.1",
+    # ── Async SQLite (historical analysis storage) ───────────────────────────
+    "aiosqlite==0.22.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.0.3",
+    "pytest-cov==7.1.0",
+    "pytest-asyncio==1.3.0",
+    "pytest-mock==3.15.1",
+    "respx==0.23.1",            # Mock httpx for Ollama client tests
+    "ruff==0.15.12",
+    "mypy==2.0.0",
+    "black==26.3.1",
+    "bandit==1.9.4",
+    "pandas-stubs==3.0.0.260204",
+    "types-beautifulsoup4==4.12.0.20250516",
+]
+
+[project.scripts]
+forensiq = "forensiq.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/forensiq/forensiq"
+Issues = "https://github.com/forensiq/forensiq/issues"
+
+# ─── Package Discovery ────────────────────────────────────────────────────────
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+forensiq = [
+    "reporting/templates/*.j2",
+    "reporting/templates/partials/*.j2",
+    "yara/templates/*.j2",
+    "py.typed",
+]
+
+# ─── Ruff (Linting) ───────────────────────────────────────────────────────────
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests", "ml"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # Pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "W",    # pycodestyle warnings
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "S",    # flake8-bandit (security)
+    "A",    # flake8-builtins
+    "C4",   # flake8-comprehensions
+    "PTH",  # flake8-use-pathlib
+    "RUF",  # Ruff-specific rules
+]
+ignore = [
+    "S101",  # Allow assert in tests (per-file override below)
+    "S603",  # subprocess calls — required for Volatility 3 integration
+    "S607",  # partial executable path — vol path from config
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106"]
+# typer.Option() in function default arguments is the standard typer CLI pattern
+"src/forensiq/cli.py" = ["B008"]
+
+# ─── MyPy (Type Checking) ─────────────────────────────────────────────────────
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+warn_unused_ignores = true
+no_implicit_reexport = true
+show_error_codes = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+# Libraries without full type stubs
+module = [
+    "yara",
+    "volatility3.*",
+    "xgboost",
+    "shap",
+    "optuna",
+    "joblib",
+    "sklearn.*",
+    "matplotlib.*",
+    "structlog.*",
+]
+ignore_missing_imports = true
+
+# ─── Pytest ───────────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = [
+    "-v",
+    "--tb=short",
+    "--strict-markers",
+    "-ra",
+]
+markers = [
+    "unit: Unit tests (no external dependencies)",
+    "integration: Integration tests (may require Volatility 3 or Ollama)",
+    "slow: Tests that take more than 5 seconds",
+]
+
+# ─── Coverage ─────────────────────────────────────────────────────────────────
+[tool.coverage.run]
+source = ["src/forensiq"]
+omit = [
+    "tests/*",
+    "ml/*",
+    "scripts/*",
+    "*/__main__.py",
+]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
+# Coverage floor — enforced in CI.  This reflects the current baseline (33 %)
+# and will be raised incrementally as tests are added.
+# Target: 80 % by end of Q3 2026 (tracked in GitHub issues).
+fail_under = 50
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+    "@(abc\\.)?abstractmethod",
+]

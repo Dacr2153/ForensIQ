@@ -1,0 +1,26 @@
+[
+  {
+    "Offset": 281473568866304,
+    "Proto": "TCPv4",
+    "LocalAddr": "192.168.1.10",
+    "LocalPort": 445,
+    "ForeignAddr": "192.168.1.20",
+    "ForeignPort": 49200,
+    "State": "ESTABLISHED",
+    "PID": 1092,
+    "Owner": "svchost.exe",
+    "Created": "2023-01-01 09:00:00.000000 UTC"
+  },
+  {
+    "Offset": 281473568866400,
+    "Proto": "TCPv4",
+    "LocalAddr": "192.168.1.10",
+    "LocalPort": 54321,
+    "ForeignAddr": "185.220.101.45",
+    "ForeignPort": 4444,
+    "State": "ESTABLISHED",
+    "PID": 3388,
+    "Owner": "payload.exe",
+    "Created": "2023-01-01 10:30:05.000000 UTC"
+  }
+]

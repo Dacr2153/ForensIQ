@@ -1,0 +1,108 @@
+# FILE: .gitignore
+# ForensIQ — Git ignore rules
+
+# ─── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.hypothesis/
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.nox/
+.tox/
+
+# ─── Virtual Environments ─────────────────────────────────────────────────────
+.venv/
+venv/
+ENV/
+env/
+env.bak/
+venv.bak/
+
+# ─── Environment & Secrets ───────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+*.secret
+
+# ─── ForensIQ Generated Files ─────────────────────────────────────────────────
+# Memory dump files (can be very large — store outside repo)
+dumps/
+*.raw
+*.mem
+*.vmem
+*.dmp
+*.lime
+*.elf
+
+# Generated HTML reports (contain analysis results — keep local)
+reports/*.html
+reports/*.json
+
+# Generated YARA rules (export to your SIEM separately)
+yara_rules/*.yar
+yara_rules/*.yara
+yara_rules/*.INVALID.txt
+
+# Trained ML models (large binary files — store with DVC or separately)
+ml/data/*.joblib
+ml/data/*.pkl
+ml/data/*.json
+ml/data/*.csv
+ml/data/train.csv
+ml/data/val.csv
+ml/data/test.csv
+# Keep the .gitkeep files
+!ml/data/.gitkeep
+
+# ─── IDE & Editor ─────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ─── Docker ───────────────────────────────────────────────────────────────────
+docker/volumes/
+
+# ─── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ─── Jupyter ──────────────────────────────────────────────────────────────────
+.ipynb_checkpoints
+*.ipynb
+
+# ─── Distribution / Packaging ─────────────────────────────────────────────────
+.Python
+build/
+dist/

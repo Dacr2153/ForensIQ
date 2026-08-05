@@ -1,0 +1,1022 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ForensIQ Report — {{ metadata.dump_filename }}</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --surface: #1e293b;
+    --surface2: #273349;
+    --border: #334155;
+    --text: #e2e8f0;
+    --text-muted: #94a3b8;
+    --accent: #38bdf8;
+    --critical: #dc2626;
+    --high: #ea580c;
+    --medium: #ca8a04;
+    --low: #16a34a;
+    --green: #22c55e;
+    --font: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    --mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 14px;
+    line-height: 1.6;
+    padding: 0 0 4rem 0;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, pre { font-family: var(--mono); font-size: 13px; }
+
+  /* ── Header ── */
+  .header {
+    background: linear-gradient(135deg, #0c1426 0%, #1a2744 50%, #0f2235 100%);
+    border-bottom: 2px solid var(--border);
+    padding: 2rem 2.5rem;
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+  }
+  .header-logo {
+    font-size: 2.2rem;
+    font-weight: 800;
+    background: linear-gradient(90deg, #38bdf8, #818cf8);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    letter-spacing: -1px;
+  }
+  .header-subtitle { color: var(--text-muted); font-size: 0.85rem; margin-top: 0.2rem; }
+  .header-meta { margin-left: auto; text-align: right; }
+  .header-meta .dump-name { font-size: 1.1rem; font-weight: 600; color: var(--accent); }
+  .header-meta .generated { font-size: 0.8rem; color: var(--text-muted); }
+
+  /* ── Threat Badge ── */
+  .threat-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4rem 1rem;
+    border-radius: 9999px;
+    font-weight: 700;
+    font-size: 0.9rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .threat-critical { background: rgba(220,38,38,0.2); color: #f87171; border: 1px solid #dc2626; }
+  .threat-high { background: rgba(234,88,12,0.2); color: #fb923c; border: 1px solid #ea580c; }
+  .threat-medium { background: rgba(202,138,4,0.2); color: #facc15; border: 1px solid #ca8a04; }
+  .threat-low { background: rgba(22,163,74,0.2); color: #4ade80; border: 1px solid #16a34a; }
+
+  /* ── Layout ── */
+  .container { max-width: 1400px; margin: 0 auto; padding: 2rem 2.5rem; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.2rem; margin-bottom: 2rem; }
+  .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1.2rem; }
+
+  /* ── Cards ── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.5rem;
+  }
+  .card-title {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--text-muted);
+    margin-bottom: 0.8rem;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .card-value { font-size: 2.5rem; font-weight: 700; line-height: 1; }
+  .card-value.red { color: #f87171; }
+  .card-value.orange { color: #fb923c; }
+  .card-value.blue { color: var(--accent); }
+  .card-value.green { color: #4ade80; }
+
+  /* ── Section Headers ── */
+  .section { margin-top: 2.5rem; }
+  .section-header {
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+    margin-bottom: 1.2rem;
+    padding-bottom: 0.6rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .section-title { font-size: 1.2rem; font-weight: 600; }
+  .section-count {
+    background: var(--surface2);
+    color: var(--text-muted);
+    border-radius: 9999px;
+    padding: 0.1rem 0.6rem;
+    font-size: 0.8rem;
+  }
+
+  /* ── Process Table ── */
+  .process-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+  }
+  .process-table th {
+    text-align: left;
+    padding: 0.6rem 0.8rem;
+    background: var(--surface2);
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    border-bottom: 1px solid var(--border);
+  }
+  .process-table td {
+    padding: 0.6rem 0.8rem;
+    border-bottom: 1px solid rgba(51,65,85,0.5);
+    vertical-align: middle;
+  }
+  .process-table tr:hover td { background: rgba(56,189,248,0.04); }
+  .process-table tr.malicious td { background: rgba(220,38,38,0.05); }
+  .process-table tr.malicious:hover td { background: rgba(220,38,38,0.1); }
+
+  /* ── Score Bar ── */
+  .score-bar-container {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-width: 140px;
+  }
+  .score-bar-bg {
+    flex: 1;
+    height: 6px;
+    background: var(--surface2);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .score-bar-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.3s ease;
+  }
+  .score-text { font-size: 0.8rem; font-weight: 600; min-width: 40px; text-align: right; }
+
+  /* ── Timeline ── */
+  .timeline { display: flex; flex-direction: column; gap: 0; }
+  .timeline-event {
+    display: flex;
+    gap: 1rem;
+    padding: 0.8rem 1rem;
+    border-left: 3px solid var(--border);
+    position: relative;
+    background: var(--surface);
+    border-radius: 0 8px 8px 0;
+    margin-bottom: 0.5rem;
+    font-size: 0.85rem;
+  }
+  .timeline-event.critical { border-left-color: var(--critical); }
+  .timeline-event.high { border-left-color: var(--high); }
+  .timeline-event.medium { border-left-color: var(--medium); }
+  .timeline-event.low { border-left-color: var(--low); }
+  .timeline-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-top: 0.35rem;
+    flex-shrink: 0;
+  }
+  .timeline-event.critical .timeline-dot { background: var(--critical); }
+  .timeline-event.high .timeline-dot { background: var(--high); }
+  .timeline-event.medium .timeline-dot { background: var(--medium); }
+  .timeline-event.low .timeline-dot { background: var(--low); }
+  .timeline-content { flex: 1; }
+  .timeline-meta { display: flex; gap: 0.8rem; align-items: center; flex-wrap: wrap; }
+  .timeline-time { color: var(--text-muted); font-size: 0.75rem; font-family: var(--mono); }
+  .timeline-pid { color: var(--accent); font-family: var(--mono); font-size: 0.8rem; }
+  .timeline-process { font-weight: 600; }
+  .timeline-mitre {
+    background: rgba(56,189,248,0.1);
+    color: var(--accent);
+    border: 1px solid rgba(56,189,248,0.3);
+    border-radius: 4px;
+    padding: 0.1rem 0.4rem;
+    font-size: 0.75rem;
+    font-family: var(--mono);
+  }
+  .timeline-description { color: var(--text-muted); margin-top: 0.2rem; font-size: 0.82rem; }
+
+  /* ── Interactive Timeline ── */
+  .fq-timeline-root { display: flex; flex-direction: column; gap: 1rem; }
+  .fq-filter-bar {
+    display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;
+    padding: 0.6rem 0.8rem; background: var(--surface2);
+    border-radius: 8px; border: 1px solid var(--border);
+  }
+  .fq-filter-bar label { font-size: 0.78rem; color: var(--text-muted); margin-right: 0.25rem; }
+  .fq-sev-btn {
+    padding: 0.2rem 0.7rem; border-radius: 20px; border: 1px solid var(--border);
+    background: var(--surface); color: var(--text-muted); cursor: pointer;
+    font-size: 0.75rem; font-family: var(--font); transition: all 0.2s;
+  }
+  .fq-sev-btn:hover { border-color: var(--accent); color: var(--text); }
+  .fq-sev-btn.active { border-color: var(--accent); color: var(--accent); background: rgba(56,189,248,0.08); font-weight: 600; }
+  .fq-sev-btn.active[data-sev="critical"] { border-color: var(--critical); color: var(--critical); background: rgba(220,38,38,0.08); }
+  .fq-sev-btn.active[data-sev="high"] { border-color: var(--high); color: var(--high); background: rgba(234,88,12,0.08); }
+  .fq-sev-btn.active[data-sev="medium"] { border-color: var(--medium); color: var(--medium); background: rgba(202,138,4,0.08); }
+  .fq-sev-btn.active[data-sev="low"] { border-color: var(--low); color: var(--low); background: rgba(22,163,74,0.08); }
+  .fq-mitre-select {
+    padding: 0.2rem 0.5rem; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--surface); color: var(--text-muted); font-size: 0.75rem;
+    cursor: pointer; outline: none;
+  }
+  .fq-mitre-select:focus { border-color: var(--accent); }
+  .fq-canvas-wrap {
+    position: relative; background: var(--surface2); border-radius: 8px;
+    border: 1px solid var(--border); overflow: hidden;
+  }
+  #fq-timeline-canvas { display: block; width: 100%; cursor: crosshair; }
+  #fq-tooltip {
+    position: absolute; pointer-events: none; display: none;
+    background: #0f172a; border: 1px solid var(--accent);
+    color: var(--text); padding: 0.5rem 0.75rem; border-radius: 6px;
+    font-size: 0.78rem; max-width: 240px; z-index: 10;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  }
+  #fq-tooltip .fq-tt-title { font-weight: 600; margin-bottom: 0.2rem; }
+  #fq-tooltip .fq-tt-detail { color: var(--text-muted); font-size: 0.73rem; }
+  .fq-event-card {
+    background: var(--surface); border-radius: 8px;
+    border-left: 3px solid var(--border); overflow: hidden;
+    transition: border-color 0.15s; font-size: 0.85rem; margin-bottom: 0.4rem;
+  }
+  .fq-event-card[data-sev="critical"] { border-left-color: var(--critical); }
+  .fq-event-card[data-sev="high"] { border-left-color: var(--high); }
+  .fq-event-card[data-sev="medium"] { border-left-color: var(--medium); }
+  .fq-event-card[data-sev="low"] { border-left-color: var(--low); }
+  .fq-event-card.fq-highlighted { outline: 2px solid var(--accent); }
+  .fq-event-header {
+    display: flex; gap: 0.8rem; align-items: center; flex-wrap: wrap;
+    padding: 0.6rem 1rem; cursor: pointer; user-select: none;
+    transition: background 0.15s;
+  }
+  .fq-event-header:hover { background: rgba(255,255,255,0.03); }
+  .fq-chevron { color: var(--text-muted); font-size: 0.7rem; margin-left: auto; transition: transform 0.2s; }
+  .fq-event-card.fq-open .fq-chevron { transform: rotate(90deg); }
+  .fq-event-details {
+    padding: 0 1rem 0.7rem 1rem; border-top: 1px solid var(--border);
+    color: var(--text-muted); font-size: 0.82rem; display: none;
+  }
+  .fq-event-card.fq-open .fq-event-details { display: block; }
+  .fq-no-results { color: var(--text-muted); text-align: center; padding: 2rem; font-size: 0.9rem; }
+  .fq-event-count { font-size: 0.75rem; color: var(--text-muted); margin-left: auto; }
+
+  /* ── YARA Rules ── */
+  .yara-rule {
+    background: #0d1b2a;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 1rem;
+  }
+  .yara-rule-header {
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+    padding: 0.7rem 1rem;
+    background: var(--surface2);
+    border-bottom: 1px solid var(--border);
+  }
+  .yara-rule-name { font-family: var(--mono); font-weight: 600; font-size: 0.9rem; }
+  .yara-valid { color: #4ade80; font-size: 0.8rem; }
+  .yara-invalid { color: #f87171; font-size: 0.8rem; }
+  .yara-code {
+    padding: 1rem;
+    overflow-x: auto;
+    white-space: pre;
+    font-family: var(--mono);
+    font-size: 0.82rem;
+    line-height: 1.6;
+    color: #c0cff0;
+  }
+  /* Rudimentary YARA syntax coloring via CSS classes (applied by JS) */
+  .kw { color: #818cf8; }
+  .str { color: #86efac; }
+  .cmnt { color: #64748b; }
+  .num { color: #fb923c; }
+  .op { color: #f9a8d4; }
+
+  /* ── Metadata Panel ── */
+  .meta-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.6rem;
+  }
+  .meta-item { display: flex; flex-direction: column; gap: 0.1rem; }
+  .meta-label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); }
+  .meta-value { font-family: var(--mono); font-size: 0.82rem; word-break: break-all; }
+
+  /* ── SHAP Bar ── */
+  .shap-bars { display: flex; flex-direction: column; gap: 0.3rem; margin-top: 0.5rem; }
+
+  /* ── Executive Summary ── */
+  .executive-text {
+    line-height: 1.8;
+    color: var(--text);
+    font-size: 0.92rem;
+    white-space: pre-wrap;
+  }
+
+  /* ── Detector Findings ── */
+  .finding-card {
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--medium);
+    border-radius: 6px;
+    padding: 0.8rem 1rem;
+    margin-bottom: 0.6rem;
+    background: var(--surface2);
+  }
+  .finding-card.critical { border-left-color: #f43f5e; }
+  .finding-card.high     { border-left-color: var(--high); }
+  .finding-card.medium   { border-left-color: var(--medium); }
+  .finding-card.low      { border-left-color: var(--low); }
+  .finding-card.info     { border-left-color: #64748b; }
+  .finding-header { display: flex; align-items: center; gap: 0.7rem; flex-wrap: wrap; }
+  .finding-title { font-weight: 600; font-size: 0.9rem; }
+  .finding-detector { font-size: 0.75rem; color: var(--text-muted); font-family: var(--mono); }
+  .finding-desc { font-size: 0.82rem; color: var(--text-muted); margin-top: 0.3rem; }
+  .finding-evidence { font-size: 0.78rem; font-family: var(--mono); color: #94a3b8; margin-top: 0.3rem; white-space: pre-wrap; }
+
+  /* ── MITRE ATT&CK Table ── */
+  .mitre-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  .mitre-table th { text-align: left; padding: 0.5rem 0.8rem; background: var(--surface2); color: var(--text-muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid var(--border); }
+  .mitre-table td { padding: 0.55rem 0.8rem; border-bottom: 1px solid rgba(255,255,255,0.04); vertical-align: top; }
+  .mitre-table tr:last-child td { border-bottom: none; }
+  .mitre-id { font-family: var(--mono); font-size: 0.82rem; color: var(--accent); }
+  .mitre-count { font-family: var(--mono); text-align: center; }
+  .mitre-tactic { font-size: 0.78rem; color: var(--text-muted); }
+  .shap-bar-row { display: flex; align-items: center; gap: 0.4rem; font-size: 0.75rem; }
+  .shap-bar-name { width: 160px; text-align: right; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .shap-bar-track { flex: 1; height: 10px; background: var(--surface2); border-radius: 5px; position: relative; overflow: visible; display: flex; align-items: center; }
+  .shap-bar-center { position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: var(--border); }
+  .shap-bar-fill-pos { position: absolute; left: 50%; height: 10px; border-radius: 0 5px 5px 0; background: #f87171; }
+  .shap-bar-fill-neg { position: absolute; right: 50%; height: 10px; border-radius: 5px 0 0 5px; background: #4ade80; }
+  .shap-bar-val { width: 55px; font-family: var(--mono); color: var(--text-muted); }
+
+  /* ── Responsive ── */
+  @media (max-width: 900px) {
+    .grid-3 { grid-template-columns: repeat(2, 1fr); }
+    .grid-2 { grid-template-columns: 1fr; }
+    .header { flex-direction: column; align-items: flex-start; }
+    .header-meta { margin-left: 0; text-align: left; }
+  }
+  @media (max-width: 600px) {
+    .grid-3 { grid-template-columns: 1fr; }
+    .container { padding: 1rem; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ══════════════════════════════════════════ HEADER -->
+<header class="header">
+  <div>
+    <div class="header-logo">⚡ ForensIQ</div>
+    <div class="header-subtitle">Memory Forensics &amp; Threat Hunting Platform</div>
+  </div>
+  <div class="header-meta">
+    <div class="dump-name">{{ metadata.dump_filename }}</div>
+    <div class="generated">Generated {{ generated_at | format_dt }}</div>
+    <div style="margin-top: 0.5rem;">
+      <span class="threat-badge threat-{{ report.threat_level }}">
+        {{ report.threat_level | upper }} THREAT
+      </span>
+    </div>
+  </div>
+</header>
+
+<div class="container">
+
+  <!-- ══════════════════════════════════════════ SUMMARY CARDS -->
+  <div class="grid-3" style="margin-top: 2rem;">
+    <div class="card">
+      <div class="card-title">🔍 Processes Analyzed</div>
+      <div class="card-value blue">{{ report.total_processes }}</div>
+      <div style="color: var(--text-muted); font-size: 0.8rem; margin-top: 0.4rem;">
+        {{ report.suspicious_count }} suspicious · {{ report.malicious_count }} malicious
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">⚠️ Malicious Processes</div>
+      <div class="card-value {% if report.malicious_count > 0 %}red{% else %}green{% endif %}">
+        {{ report.malicious_count }}
+      </div>
+      <div style="color: var(--text-muted); font-size: 0.8rem; margin-top: 0.4rem;">
+        {% if report.malicious_count > 0 %}
+          Immediate investigation required
+        {% else %}
+          No malicious processes detected
+        {% endif %}
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">🛡️ YARA Rules Generated</div>
+      <div class="card-value {% if report.valid_yara_count > 0 %}blue{% else %}orange{% endif %}">
+        {{ report.valid_yara_count }}
+      </div>
+      <div style="color: var(--text-muted); font-size: 0.8rem; margin-top: 0.4rem;">
+        {{ yara_results | length }} attempted · {{ report.valid_yara_count }} validated
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════ DUMP METADATA -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-title">📋 Analysis Metadata</span>
+    </div>
+    <div class="card">
+      <div class="meta-grid">
+        <div class="meta-item">
+          <div class="meta-label">Dump File</div>
+          <div class="meta-value">{{ metadata.dump_filename }}</div>
+        </div>
+        <div class="meta-item">
+          <div class="meta-label">SHA-256</div>
+          <div class="meta-value">{{ metadata.dump_sha256 | default('N/A', true) }}</div>
+        </div>
+        <div class="meta-item">
+          <div class="meta-label">Dump Size</div>
+          <div class="meta-value">{{ metadata.dump_size_bytes | format_size }}</div>
+        </div>
+        <div class="meta-item">
+          <div class="meta-label">OS Profile</div>
+          <div class="meta-value">{{ metadata.os_profile | default('Unknown', true) }}</div>
+        </div>
+        <div class="meta-item">
+          <div class="meta-label">Analysis Started</div>
+          <div class="meta-value">{{ metadata.analysis_start | format_dt }}</div>
+        </div>
+        <div class="meta-item">
+          <div class="meta-label">Duration</div>
+          <div class="meta-value">
+            {% if metadata.analysis_duration_seconds %}
+              {{ "%.1f" | format(metadata.analysis_duration_seconds) }}s
+            {% else %}
+              N/A
+            {% endif %}
+          </div>
+        </div>
+        <div class="meta-item">
+          <div class="meta-label">Volatility Version</div>
+          <div class="meta-value">{{ metadata.volatility_version | default('N/A', true) }}</div>
+        </div>
+        <div class="meta-item">
+          <div class="meta-label">ForensIQ Version</div>
+          <div class="meta-value">{{ metadata.forensiq_version | default('N/A', true) }}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════ PROCESS TABLE -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-title">🔬 Process Analysis</span>
+      <span class="section-count">{{ ranked_processes | length }} processes</span>
+    </div>
+    <div class="card" style="padding: 0; overflow: hidden;">
+      <table class="process-table">
+        <thead>
+          <tr>
+            <th>PID</th>
+            <th>Process Name</th>
+            <th>PPID</th>
+            <th>Threat Score</th>
+            <th>DLLs</th>
+            <th>Connections</th>
+            <th>Malfind</th>
+            <th>VAD RWX</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for proc in ranked_processes %}
+          <tr class="{% if proc.is_malicious %}malicious{% endif %}">
+            <td><code>{{ proc.pid }}</code></td>
+            <td style="font-weight: {% if proc.is_malicious %}600{% else %}400{% endif %};">
+              {{ proc.name }}
+            </td>
+            <td><code style="color: var(--text-muted);">{{ proc.ppid }}</code></td>
+            <td>
+              <div class="score-bar-container">
+                <div class="score-bar-bg">
+                  <div class="score-bar-fill" style="
+                    width: {{ (proc.threat_score * 100) | int }}%;
+                    background: {% if proc.threat_score >= 0.75 %}#dc2626{% elif proc.threat_score >= 0.50 %}#ea580c{% elif proc.threat_score >= 0.25 %}#ca8a04{% else %}#16a34a{% endif %};
+                  "></div>
+                </div>
+                <span class="score-text" style="color: {% if proc.threat_score >= 0.65 %}#f87171{% elif proc.threat_score >= 0.35 %}#facc15{% else %}#4ade80{% endif %};">
+                  {{ proc.threat_score | format_score }}
+                </span>
+              </div>
+            </td>
+            <td>
+              <span {% if proc.suspicious_dll_count > 0 %}style="color: #fb923c;"{% endif %}>
+                {{ proc.dll_count }}
+                {% if proc.suspicious_dll_count > 0 %}
+                  <small style="color: #f87171;">({{ proc.suspicious_dll_count }} susp.)</small>
+                {% endif %}
+              </span>
+            </td>
+            <td>
+              <span {% if proc.external_connection_count > 0 %}style="color: #f87171;"{% endif %}>
+                {{ proc.network_connection_count }}
+                {% if proc.external_connection_count > 0 %}
+                  <small style="color: #f87171;">({{ proc.external_connection_count }} ext.)</small>
+                {% endif %}
+              </span>
+            </td>
+            <td>
+              <span {% if proc.malfind_hits > 0 %}style="color: #f87171; font-weight: 700;"{% endif %}>
+                {{ proc.malfind_hits }}
+              </span>
+            </td>
+            <td>
+              <span {% if proc.vad_rwx_count > 0 %}style="color: #f87171; font-weight: 700;"{% endif %}>
+                {{ proc.vad_rwx_count }}
+              </span>
+            </td>
+            <td>
+              {% if proc.is_malicious %}
+                <span class="threat-badge threat-critical" style="font-size: 0.7rem; padding: 0.2rem 0.5rem;">MALICIOUS</span>
+              {% elif proc.threat_score >= 0.35 %}
+                <span class="threat-badge threat-medium" style="font-size: 0.7rem; padding: 0.2rem 0.5rem;">SUSPICIOUS</span>
+              {% else %}
+                <span style="color: var(--text-muted); font-size: 0.8rem;">Clean</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════ TIMELINE -->
+  {% if timeline %}
+  <div class="section" id="fq-section-timeline">
+    <div class="section-header">
+      <span class="section-title">⏱ Interactive Threat Timeline</span>
+      <span class="section-count" id="fq-event-count">{{ timeline | length }} events</span>
+    </div>
+    <div class="fq-timeline-root">
+
+      <!-- Filter bar -->
+      <div class="fq-filter-bar">
+        <label>Severity:</label>
+        <button class="fq-sev-btn active" data-sev="all">All</button>
+        <button class="fq-sev-btn" data-sev="critical">&#x2715; Critical</button>
+        <button class="fq-sev-btn" data-sev="high">&#9650; High</button>
+        <button class="fq-sev-btn" data-sev="medium">&#9644; Medium</button>
+        <button class="fq-sev-btn" data-sev="low">&#9660; Low</button>
+        <label style="margin-left:0.8rem;">MITRE:</label>
+        <select class="fq-mitre-select" id="fq-mitre-filter">
+          <option value="">All Techniques</option>
+          {% set seen_mitre = [] %}
+          {% for event in timeline %}
+            {% if event.mitre_technique and event.mitre_technique not in seen_mitre %}
+              {% if seen_mitre.append(event.mitre_technique) %}{% endif %}
+              <option value="{{ event.mitre_technique }}">{{ event.mitre_technique }}{% if event.mitre_technique_name %} — {{ event.mitre_technique_name }}{% endif %}</option>
+            {% endif %}
+          {% endfor %}
+        </select>
+        <span class="fq-event-count" id="fq-visible-count"></span>
+      </div>
+
+      <!-- Visual canvas scatter chart -->
+      <div class="fq-canvas-wrap">
+        <canvas id="fq-timeline-canvas" height="160"></canvas>
+        <div id="fq-tooltip">
+          <div class="fq-tt-title" id="fq-tt-title"></div>
+          <div class="fq-tt-detail" id="fq-tt-detail"></div>
+        </div>
+      </div>
+
+      <!-- Event cards (rendered by JS from JSON data) -->
+      <div id="fq-event-list">
+        <div class="fq-no-results" id="fq-no-results" style="display:none;">No events match the current filter.</div>
+      </div>
+
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- ══════════════════════════════════════════ YARA RULES -->
+  {% if yara_results %}
+  <div class="section">
+    <div class="section-header">
+      <span class="section-title">📜 Generated YARA Rules</span>
+      <span class="section-count">{{ report.valid_yara_count }} valid / {{ yara_results | length }} total</span>
+    </div>
+    {% for rule in yara_results %}
+    <div class="yara-rule">
+      <div class="yara-rule-header">
+        <span class="yara-rule-name">{{ rule.rule_name }}</span>
+        <span style="color: var(--text-muted); font-size: 0.8rem;">→ {{ rule.process_name }} (PID {{ rule.pid }})</span>
+        {% if rule.is_valid %}
+          <span class="yara-valid">✓ Validated by yara-python</span>
+        {% else %}
+          <span class="yara-invalid">✗ Validation failed: {{ rule.validation_error[:80] }}...</span>
+        {% endif %}
+      </div>
+      {% if rule.rule_text %}
+      <pre class="yara-code" id="yara-{{ loop.index }}">{{ rule.rule_text | e }}</pre>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <!-- ══════════════════════════════════════════ LLM / MODEL INFO -->
+  {% if report.model_info or report.llm_info %}
+  <div class="section">
+    <div class="section-header">
+      <span class="section-title">🤖 Model Information</span>
+    </div>
+    <div class="card">
+      <div class="meta-grid">
+        {% if report.llm_info.get('model') %}
+        <div class="meta-item">
+          <div class="meta-label">LLM Model</div>
+          <div class="meta-value">{{ report.llm_info.get('model') }}</div>
+        </div>
+        {% endif %}
+        {% if report.llm_info.get('status') %}
+        <div class="meta-item">
+          <div class="meta-label">LLM Status</div>
+          <div class="meta-value">
+            {% if report.llm_info.get('status') == 'ok' %}Available{% else %}No local AI — rule-based summary{% endif %}
+          </div>
+        </div>
+        {% endif %}
+        {% for key, value in report.model_info.items() %}
+        <div class="meta-item">
+          <div class="meta-label">{{ key | replace('_', ' ') | title }}</div>
+          <div class="meta-value">{{ value }}</div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- ══════════════════════════════════════════ EXECUTIVE SUMMARY -->
+  {% if report.executive_summary %}
+  <div class="section">
+    <div class="section-header">
+      <span class="section-title">📄 Executive Summary</span>
+      <span class="section-count">
+        {%- if report.llm_info.get('model') -%}
+          AI-generated · {{ report.llm_info.get('model') }}
+        {%- else -%}
+          Rule-based summary · no local AI model detected
+        {%- endif -%}
+      </span>
+    </div>
+    <div class="card">
+      <p class="executive-text">{{ report.executive_summary }}</p>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- ══════════════════════════════════════════ MITRE ATT&CK -->
+  {% if report.mitre_techniques %}
+  <div class="section">
+    <div class="section-header">
+      <span class="section-title">🛡 MITRE ATT&amp;CK Coverage</span>
+      <span class="section-count">{{ report.mitre_techniques | length }} technique(s)</span>
+    </div>
+    <div class="card" style="padding: 0; overflow: hidden;">
+      <table class="mitre-table">
+        <thead>
+          <tr>
+            <th>Technique ID</th>
+            <th>Name</th>
+            <th>Tactic</th>
+            <th style="text-align:center">Observations</th>
+            <th>PIDs</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for t in report.mitre_techniques %}
+          <tr>
+            <td><a class="mitre-id" href="{{ t.url }}" target="_blank" rel="noopener">{{ t.technique_id }}</a></td>
+            <td>{{ t.name }}</td>
+            <td style="font-size:0.78rem; color:var(--text-muted)">{{ t.tactic }}</td>
+            <td class="mitre-count">{{ t.observation_count }}</td>
+            <td style="font-size:0.78rem; font-family:var(--mono)">{{ t.observed_pids | join(', ') }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- ══════════════════════════════════════════ DETECTOR FINDINGS -->
+  {% if report.detector_findings %}
+  <div class="section">
+    <div class="section-header">
+      <span class="section-title">🔍 Detector Plugin Findings</span>
+      <span class="section-count">{{ report.detector_findings | length }} finding(s)</span>
+    </div>
+    {% for f in report.detector_findings | sort(attribute='severity') %}
+    <div class="finding-card {{ f.severity }}">
+      <div class="finding-header">
+        <span class="badge severity-{{ f.severity }}">{{ f.severity | upper }}</span>
+        <span class="finding-title">{{ f.title }}</span>
+        <span class="finding-detector">{{ f.detector }} · PID {{ f.pid }} ({{ f.process_name }})</span>
+        {% if f.mitre_technique %}
+        <span class="timeline-mitre">{{ f.mitre_technique }}</span>
+        {% endif %}
+      </div>
+      <div class="finding-desc">{{ f.description }}</div>
+      {% if f.evidence %}
+      <div class="finding-evidence">{{ f.evidence | truncate(300) }}</div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+</div><!-- /container -->
+
+<script>
+// ── Minimal YARA syntax highlighting ──────────────────────────────────────────
+document.querySelectorAll('.yara-code').forEach(function(el) {
+  var html = el.innerHTML;
+  // Keywords
+  html = html.replace(/\b(rule|meta|strings|condition|and|or|not|any|all|of|them|true|false|uint8|uint16|uint32|nocase|wide|ascii|fullword|import|include|global|private)\b/g, '<span class="kw">$1</span>');
+  // Strings (double-quoted)
+  html = html.replace(/"([^"]*)"/g, '<span class="str">"$1"</span>');
+  // Comments
+  html = html.replace(/(\/\/.*$)/gm, '<span class="cmnt">$1</span>');
+  // Hex strings
+  html = html.replace(/(\{[0-9a-fA-F\s\?]+\})/g, '<span class="str">$1</span>');
+  el.innerHTML = html;
+});
+
+// ── Confirm hash displayed correctly ─────────────────────────────────────────
+console.log('[ForensIQ] Report loaded. Threat level: {{ report.threat_level }}');
+
+// ══════════════════════════════════════════════════════════════════════════════
+// INTERACTIVE TIMELINE
+// ══════════════════════════════════════════════════════════════════════════════
+(function() {
+  var FQ_EVENTS = {{ timeline_json | safe }};
+  if (!FQ_EVENTS || FQ_EVENTS.length === 0) return;
+
+  var SEV_COLORS = { critical:'#dc2626', high:'#ea580c', medium:'#ca8a04', low:'#16a34a' };
+  var SEV_ORDER  = { critical:0, high:1, medium:2, low:3 };
+  var activeSev  = 'all';
+  var activeMitre = '';
+  var openCards  = {};
+
+  // ── Build event cards ────────────────────────────────────────────────────
+  var listEl = document.getElementById('fq-event-list');
+  var noResEl = document.getElementById('fq-no-results');
+
+  function escapeHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  function formatTs(ts) {
+    if (!ts) return 'N/A';
+    var d = new Date(ts * 1000);
+    return d.toISOString().replace('T',' ').slice(0,19) + ' UTC';
+  }
+
+  function buildCards() {
+    // Remove old cards
+    var old = listEl.querySelectorAll('.fq-event-card');
+    old.forEach(function(c){ listEl.removeChild(c); });
+
+    var visible = 0;
+    FQ_EVENTS.forEach(function(ev, i) {
+      if (activeSev !== 'all' && ev.severity !== activeSev) return;
+      if (activeMitre && ev.mitre_technique !== activeMitre) return;
+      visible++;
+
+      var card = document.createElement('div');
+      card.className = 'fq-event-card';
+      card.id = 'fq-card-' + ev.idx;
+      card.setAttribute('data-sev', ev.severity);
+      card.setAttribute('data-idx', ev.idx);
+      if (openCards[ev.idx]) card.classList.add('fq-open');
+
+      var sevColor = SEV_COLORS[ev.severity] || '#94a3b8';
+      var badge = '<span style="background:' + sevColor + '22;color:' + sevColor + ';border:1px solid ' + sevColor + '44;border-radius:4px;padding:0.1rem 0.4rem;font-size:0.7rem;font-weight:600;">' + escapeHtml(ev.severity.toUpperCase()) + '</span>';
+      var mitreBadge = ev.mitre_technique ? '<span style="background:rgba(56,189,248,0.1);color:#38bdf8;border:1px solid rgba(56,189,248,0.3);border-radius:4px;padding:0.1rem 0.4rem;font-size:0.72rem;font-family:monospace;">' + escapeHtml(ev.mitre_technique) + '</span>' : '';
+
+      card.innerHTML =
+        '<div class="fq-event-header" onclick="fqToggle(' + ev.idx + ')">' +
+          '<span style="color:#94a3b8;font-size:0.73rem;font-family:monospace;">' + escapeHtml(formatTs(ev.ts)) + '</span>' +
+          '<span style="color:#38bdf8;font-family:monospace;font-size:0.78rem;">PID ' + escapeHtml(String(ev.pid)) + '</span>' +
+          '<span style="font-weight:600;">' + escapeHtml(ev.process_name) + '</span>' +
+          badge +
+          mitreBadge +
+          '<span class="fq-chevron">&#9656;</span>' +
+        '</div>' +
+        '<div class="fq-event-details">' +
+          '<p style="margin-top:0.5rem;">' + escapeHtml(ev.description) + '</p>' +
+          (ev.mitre_technique_name ? '<p style="color:#38bdf8;margin-top:0.3rem;font-size:0.78rem;">MITRE ATT&amp;CK: ' + escapeHtml(ev.mitre_technique) + ' — ' + escapeHtml(ev.mitre_technique_name) + '</p>' : '') +
+        '</div>';
+
+      listEl.insertBefore(card, noResEl);
+    });
+
+    noResEl.style.display = visible === 0 ? 'block' : 'none';
+    var countEl = document.getElementById('fq-visible-count');
+    if (countEl) countEl.textContent = visible + ' of ' + FQ_EVENTS.length + ' events';
+    var totalEl = document.getElementById('fq-event-count');
+    if (totalEl) totalEl.textContent = visible + (visible !== FQ_EVENTS.length ? ' / ' + FQ_EVENTS.length : '') + ' events';
+  }
+
+  window.fqToggle = function(idx) {
+    var card = document.getElementById('fq-card-' + idx);
+    if (!card) return;
+    var isOpen = card.classList.toggle('fq-open');
+    openCards[idx] = isOpen;
+  };
+
+  // ── Severity filter buttons ──────────────────────────────────────────────
+  document.querySelectorAll('.fq-sev-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      document.querySelectorAll('.fq-sev-btn').forEach(function(b){ b.classList.remove('active'); });
+      btn.classList.add('active');
+      activeSev = btn.getAttribute('data-sev');
+      buildCards();
+      drawCanvas();
+    });
+  });
+
+  // ── MITRE filter dropdown ────────────────────────────────────────────────
+  var mitreSelect = document.getElementById('fq-mitre-filter');
+  if (mitreSelect) {
+    mitreSelect.addEventListener('change', function() {
+      activeMitre = this.value;
+      buildCards();
+      drawCanvas();
+    });
+  }
+
+  // ── Canvas chart ─────────────────────────────────────────────────────────
+  var canvas  = document.getElementById('fq-timeline-canvas');
+  var tooltip = document.getElementById('fq-tooltip');
+  var ttTitle = document.getElementById('fq-tt-title');
+  var ttDetail= document.getElementById('fq-tt-detail');
+
+  var dots = []; // { x, y, ev } for hit-testing
+
+  function drawCanvas() {
+    if (!canvas) return;
+    var dpr   = window.devicePixelRatio || 1;
+    var W     = canvas.parentElement.clientWidth;
+    var H     = 160;
+    canvas.width  = W * dpr;
+    canvas.height = H * dpr;
+    canvas.style.width  = W + 'px';
+    canvas.style.height = H + 'px';
+    var ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+
+    var pad = { top:20, right:20, bottom:30, left:20 };
+    var iW  = W - pad.left - pad.right;
+    var iH  = H - pad.top  - pad.bottom;
+
+    // Background grid lines
+    ctx.fillStyle = '#1e293b';
+    ctx.fillRect(0, 0, W, H);
+    ctx.strokeStyle = '#334155';
+    ctx.lineWidth   = 0.5;
+    ['critical','high','medium','low'].forEach(function(sev, i) {
+      var y = pad.top + (i / 3) * iH;
+      ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W - pad.right, y); ctx.stroke();
+      ctx.fillStyle = SEV_COLORS[sev];
+      ctx.font = '9px ' + (getComputedStyle(document.documentElement).getPropertyValue('--mono') || 'monospace');
+      ctx.fillText(sev, pad.left, y - 3);
+    });
+
+    // Time axis
+    var evFiltered = FQ_EVENTS.filter(function(ev) {
+      if (activeSev !== 'all' && ev.severity !== activeSev) return false;
+      if (activeMitre && ev.mitre_technique !== activeMitre) return false;
+      return true;
+    });
+
+    if (evFiltered.length === 0) {
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('No events to display', W / 2, H / 2);
+      ctx.textAlign = 'start';
+      dots = [];
+      return;
+    }
+
+    var timestamps = evFiltered.map(function(ev){ return ev.ts || 0; });
+    var minTs = Math.min.apply(null, timestamps);
+    var maxTs = Math.max.apply(null, timestamps);
+    var tsRange = maxTs - minTs || 1;
+
+    // Draw axis label (time range)
+    ctx.fillStyle = '#64748b';
+    ctx.font = '9px sans-serif';
+    var d1 = new Date(minTs * 1000).toISOString().slice(0,19).replace('T',' ');
+    var d2 = new Date(maxTs * 1000).toISOString().slice(0,19).replace('T',' ');
+    ctx.fillText(d1, pad.left, H - 8);
+    ctx.textAlign = 'right';
+    ctx.fillText(d2, W - pad.right, H - 8);
+    ctx.textAlign = 'start';
+
+    dots = [];
+    evFiltered.forEach(function(ev) {
+      var x = pad.left + ((ev.ts - minTs) / tsRange) * iW;
+      var yFrac = SEV_ORDER[ev.severity] !== undefined ? SEV_ORDER[ev.severity] / 3 : 0.5;
+      var y = pad.top + yFrac * iH + (Math.random() - 0.5) * 8; // small vertical jitter
+
+      var col = SEV_COLORS[ev.severity] || '#94a3b8';
+      ctx.beginPath();
+      ctx.arc(x, y, 6, 0, Math.PI * 2);
+      ctx.fillStyle = col + 'cc';
+      ctx.fill();
+      ctx.strokeStyle = col;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      dots.push({x: x, y: y, ev: ev});
+    });
+  }
+
+  // ── Canvas mouse interactions ────────────────────────────────────────────
+  if (canvas) {
+    canvas.addEventListener('mousemove', function(e) {
+      var rect = canvas.getBoundingClientRect();
+      var mx   = e.clientX - rect.left;
+      var my   = e.clientY - rect.top;
+      var hit  = null;
+      dots.forEach(function(d) { if (Math.hypot(d.x - mx, d.y - my) < 10) hit = d; });
+      if (hit) {
+        canvas.style.cursor = 'pointer';
+        ttTitle.textContent  = hit.ev.process_name + ' (PID ' + hit.ev.pid + ')';
+        ttDetail.textContent = hit.ev.description.slice(0, 90) + (hit.ev.description.length > 90 ? '…' : '');
+        var tx = mx + 14;
+        var ty = my + 14;
+        tooltip.style.left    = tx + 'px';
+        tooltip.style.top     = ty + 'px';
+        tooltip.style.display = 'block';
+      } else {
+        canvas.style.cursor = 'crosshair';
+        tooltip.style.display = 'none';
+      }
+    });
+
+    canvas.addEventListener('mouseleave', function() {
+      tooltip.style.display = 'none';
+    });
+
+    canvas.addEventListener('click', function(e) {
+      var rect = canvas.getBoundingClientRect();
+      var mx   = e.clientX - rect.left;
+      var my   = e.clientY - rect.top;
+      dots.forEach(function(d) {
+        if (Math.hypot(d.x - mx, d.y - my) < 10) {
+          var card = document.getElementById('fq-card-' + d.ev.idx);
+          if (card) {
+            card.scrollIntoView({behavior:'smooth', block:'center'});
+            if (!card.classList.contains('fq-open')) {
+              card.classList.add('fq-open');
+              openCards[d.ev.idx] = true;
+            }
+            card.classList.add('fq-highlighted');
+            setTimeout(function(){ card.classList.remove('fq-highlighted'); }, 2000);
+          }
+        }
+      });
+    });
+
+    window.addEventListener('resize', function() { drawCanvas(); });
+  }
+
+  // ── Init ─────────────────────────────────────────────────────────────────
+  buildCards();
+  drawCanvas();
+})();
+</script>
+</body>
+</html>

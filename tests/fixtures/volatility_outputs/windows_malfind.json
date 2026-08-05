@@ -1,0 +1,12 @@
+[
+  {
+    "PID": 3388,
+    "Process": "payload.exe",
+    "Start VPN": "0x400000",
+    "End VPN": "0x41ffff",
+    "Tag": "VadS",
+    "Protection": "PAGE_EXECUTE_READWRITE",
+    "Hexdump": "4d5a 9000 0300 0000 0400 0000 ffff 0000 b800 0000",
+    "Disassembly": "0x400000\t55\t\tPUSH EBP\n0x400001\t8bec\t\tMOV EBP, ESP\n0x400003\t6aff\t\tPUSH -0x1"
+  }
+]

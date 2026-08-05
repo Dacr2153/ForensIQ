@@ -1,0 +1,12 @@
+[
+  {
+    "PID": 1092,
+    "Process": "svchost.exe",
+    "Args": "svchost.exe -k netsvcs -p -s Browser"
+  },
+  {
+    "PID": 3388,
+    "Process": "payload.exe",
+    "Args": "payload.exe -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIA=="
+  }
+]

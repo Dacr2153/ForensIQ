@@ -1,0 +1,26 @@
+[
+  {
+    "PID": 3388,
+    "Process": "payload.exe",
+    "Start VPN": 4194304,
+    "End VPN": 4325375,
+    "Tag": "VadS",
+    "Protection": "PAGE_EXECUTE_READWRITE",
+    "CommitCharge": 128,
+    "PrivateMemory": 1,
+    "Parent": 0,
+    "File": null
+  },
+  {
+    "PID": 3388,
+    "Process": "payload.exe",
+    "Start VPN": 140701504282624,
+    "End VPN": 140701504413695,
+    "Tag": "Vad",
+    "Protection": "PAGE_READONLY",
+    "CommitCharge": 0,
+    "PrivateMemory": 0,
+    "Parent": 0,
+    "File": "\\Windows\\System32\\ntdll.dll"
+  }
+]

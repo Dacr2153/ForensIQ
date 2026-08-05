@@ -1,0 +1,44 @@
+[
+  {
+    "PID": 1092,
+    "Process": "svchost.exe",
+    "Base": 140700000000000,
+    "Size": 1048576,
+    "Name": "ntdll.dll",
+    "Path": "\\Windows\\System32\\ntdll.dll",
+    "LoadCount": 65535,
+    "FileVersion": null,
+    "Description": null,
+    "Company": null,
+    "InternalName": null,
+    "OriginalFileName": null
+  },
+  {
+    "PID": 1092,
+    "Process": "svchost.exe",
+    "Base": 140690000000000,
+    "Size": 524288,
+    "Name": "kernel32.dll",
+    "Path": "\\Windows\\System32\\kernel32.dll",
+    "LoadCount": 65535,
+    "FileVersion": null,
+    "Description": null,
+    "Company": null,
+    "InternalName": null,
+    "OriginalFileName": null
+  },
+  {
+    "PID": 3388,
+    "Process": "payload.exe",
+    "Base": 268435456,
+    "Size": 131072,
+    "Name": "malicious.dll",
+    "Path": "\\Users\\victim\\AppData\\Local\\Temp\\malicious.dll",
+    "LoadCount": 1,
+    "FileVersion": null,
+    "Description": null,
+    "Company": null,
+    "InternalName": null,
+    "OriginalFileName": null
+  }
+]
