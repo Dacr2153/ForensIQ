@@ -12,6 +12,48 @@ import pytest
 from forensiq.models.report import DumpMetadata, ForensiqReport
 from forensiq.reporting.builder import ReportBuilder
 
+# ── _json_for_script (stored-XSS mitigation) ──────────────────────────────────
+
+
+class TestJsonForScript:
+    def test_escapes_script_tag_in_string_value(self) -> None:
+        from forensiq.reporting.builder import _json_for_script
+
+        payload = "</script><script>alert(1)</script>"
+        out = str(_json_for_script([{"process_name": payload}]))
+        assert "<" not in out and ">" not in out
+        assert "\\u003c/script\\u003e" in out
+        assert "alert(1)" in out
+
+    def test_escapes_ampersand_and_unicode_separators(self) -> None:
+        from forensiq.reporting.builder import _json_for_script
+
+        out = str(_json_for_script([{"description": "a&b\u2028c\u2029d"}]))
+        assert "\\u0026" in out
+        assert "\\u2028" in out
+        assert "\\u2029" in out
+        assert "\u2028" not in out
+
+    def test_output_is_valid_json_when_unescaped(self) -> None:
+        import json as jsonlib
+
+        from forensiq.reporting.builder import _json_for_script
+
+        payload = "</script><script>alert(1)</script>"
+        out = str(_json_for_script([{"process_name": payload}]))
+        # Undoing the JS-safe escapes must yield the original data.
+        decoded = out.replace("\\u003c", "<").replace("\\u003e", ">")
+        assert jsonlib.loads(decoded)[0]["process_name"] == payload
+
+    def test_returns_markup_so_autoescape_does_not_double_escape(self) -> None:
+        from forensiq.reporting.builder import _json_for_script
+
+        out = _json_for_script({"k": "v"})
+        assert isinstance(str(out), str)
+        # Structural quotes must survive so JS can parse the literal.
+        assert '"k"' in str(out)
+
+
 # ── _format_size ──────────────────────────────────────────────────────────────
 
 
@@ -155,7 +197,11 @@ class TestRenderErrors:
         builder = ReportBuilder()
         report = self._make_report(tmp_path)
 
-        with patch.object(builder._env, "get_template", side_effect=TemplateNotFound("report.html.j2")):
+        with patch.object(
+            builder._env,
+            "get_template",
+            side_effect=TemplateNotFound("report.html.j2"),
+        ):
             with pytest.raises(ReportError):
                 builder.render(report, output_dir=tmp_path)
 
@@ -172,7 +218,7 @@ class TestRenderErrors:
             # Make output_dir a file so mkdir fails; or patch write_text
             output_path_mock = MagicMock(spec=Path)
             output_path_mock.write_text.side_effect = OSError("disk full")
-            with patch("forensiq.reporting.builder.Path") as MockPath:
+            with patch("forensiq.reporting.builder.Path"):
                 # This is complex to patch; instead patch the output path's write
                 # Let's use a simpler approach: patch Path.write_text to fail
                 pass
@@ -232,3 +278,98 @@ class TestRenderLlmInfo:
         path = builder.render(report, tmp_path)
         html = path.read_text()
         assert "no local AI model" in html
+
+
+# ── render — stored-XSS regression ────────────────────────────────────────────
+
+
+class TestRenderXssMitigation:
+    def test_script_tag_in_process_name_does_not_break_out(self, tmp_path: Path) -> None:
+        """Attacker-controlled process names must not break out of the JS context.
+
+        A process name containing ``</script>`` used to be injected verbatim
+        via ``{{ timeline_json | safe }}``, creating a stored-XSS vector in the
+        generated report.  The ``json_script`` filter must neutralise it.
+        """
+        from forensiq.models.report import DumpMetadata, ForensiqReport, ThreatEvent
+
+        metadata = DumpMetadata(
+            dump_path="/dumps/mem.raw",
+            dump_sha256="a" * 64,
+            dump_size_bytes=1024 * 1024,
+            analysis_start=datetime(2024, 1, 1, tzinfo=UTC),
+        )
+        payload = "</script><script>alert(1)</script>"
+        report = ForensiqReport(
+            metadata=metadata,
+            executive_summary="",
+            timeline=[
+                ThreatEvent(
+                    pid=1,
+                    process_name=payload,
+                    event_type="malicious",
+                    severity="critical",
+                    description="Injected script content",
+                )
+            ],
+        )
+
+        builder = ReportBuilder()
+        path = builder.render(report, tmp_path)
+        html = path.read_text()
+
+        # The raw breakout sequence must not appear anywhere in the output.
+        assert "</script><script>" not in html
+        assert "<script>alert(1)" not in html
+        # The payload content survives (escaped) so evidence is not lost.
+        assert "\\u003c/script\\u003e" in html
+
+
+# ── render — degraded-analysis banner ─────────────────────────────────────────
+
+
+class TestRenderDegradedBanner:
+    def test_degraded_reason_renders_warning_banner(self, tmp_path: Path) -> None:
+        from forensiq.models.report import DumpMetadata, ForensiqReport
+
+        metadata = DumpMetadata(
+            dump_path="/dumps/mem.raw",
+            dump_sha256="a" * 64,
+            dump_size_bytes=1024 * 1024,
+            analysis_start=datetime(2024, 1, 1, tzinfo=UTC),
+        )
+        report = ForensiqReport(
+            metadata=metadata,
+            degraded_reason=(
+                "ML model not found — classification skipped, "
+                "all process scores set to 0.0"
+            ),
+        )
+
+        builder = ReportBuilder()
+        path = builder.render(report, tmp_path)
+        html = path.read_text()
+
+        assert "Degraded Analysis" in html
+        assert "ML Classification" in html
+        assert "ML model not found" in html
+        assert "be treated as a clean result" in html
+
+    def test_clean_report_has_no_degraded_banner(self, tmp_path: Path) -> None:
+        from forensiq.models.report import DumpMetadata, ForensiqReport
+
+        metadata = DumpMetadata(
+            dump_path="/dumps/mem.raw",
+            dump_sha256="a" * 64,
+            dump_size_bytes=1024 * 1024,
+            analysis_start=datetime(2024, 1, 1, tzinfo=UTC),
+        )
+        report = ForensiqReport(metadata=metadata)
+
+        builder = ReportBuilder()
+        path = builder.render(report, tmp_path)
+        html = path.read_text()
+
+        assert "Degraded Analysis" not in html
+        assert "be treated as a clean result" not in html
+

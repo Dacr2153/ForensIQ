@@ -402,6 +402,20 @@
 
 <div class="container">
 
+  {% if report.degraded_reason %}
+  <div class="card" style="border-left: 4px solid var(--high); background: #2a1e12; margin-top: 2rem;">
+    <div class="card-title">⚠️ Degraded Analysis — ML Classification Not Applied</div>
+    <p style="margin: 0.4rem 0; color: var(--text);">
+      {{ report.degraded_reason }}
+    </p>
+    <p style="margin: 0.4rem 0; color: var(--text-muted); font-size: 0.85rem;">
+      Process threat scores were not produced by the XGBoost model. This report
+      must <strong>not</strong> be treated as a clean result. Run
+      <code>forensiq train</code> to (re)build the model, then re-analyze.
+    </p>
+  </div>
+  {% endif %}
+
   <!-- ══════════════════════════════════════════ SUMMARY CARDS -->
   <div class="grid-3" style="margin-top: 2rem;">
     <div class="card">
@@ -779,7 +793,7 @@ console.log('[ForensIQ] Report loaded. Threat level: {{ report.threat_level }}')
 // INTERACTIVE TIMELINE
 // ══════════════════════════════════════════════════════════════════════════════
 (function() {
-  var FQ_EVENTS = {{ timeline_json | safe }};
+  var FQ_EVENTS = {{ timeline_json | json_script }};
   if (!FQ_EVENTS || FQ_EVENTS.length === 0) return;
 
   var SEV_COLORS = { critical:'#dc2626', high:'#ea580c', medium:'#ca8a04', low:'#16a34a' };

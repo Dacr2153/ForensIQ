@@ -25,12 +25,36 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from jinja2 import Environment, PackageLoader, select_autoescape
+from markupsafe import Markup
 
 from forensiq.models.report import ForensiqReport
 from forensiq.utils.exceptions import ReportError
 from forensiq.utils.logger import get_logger
 
 log = get_logger(__name__)
+
+
+def _json_for_script(value: object) -> Markup:
+    """Serialize ``value`` to JSON safe to embed in an HTML ``<script>`` block.
+
+    ``json.dumps`` does not escape ``<``, ``>`` or ``&`` (or U+2028/U+2029),
+    so attacker-controlled strings (process names, timeline descriptions) can
+    break out of a JS string literal and inject markup — a stored-XSS vector
+    in generated reports.  Re-encoding those characters as ``\\uXXXX`` escapes
+    keeps the JSON valid while neutralising the script-context breakout.
+    """
+    encoded = json.dumps(value, ensure_ascii=False)
+    escaped = (
+        encoded.replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+    )
+    # Deliberate Markup: content is escaped above BEFORE wrapping, so this is
+    # the safe (and only) way to inject JSON into a <script> block without
+    # double-escaped strings corrupting the literal.
+    return Markup(escaped)  # noqa: S704
 
 
 class ReportBuilder:
@@ -66,6 +90,7 @@ class ReportBuilder:
         self._env.filters["format_dt"] = lambda dt: (
             dt.strftime("%Y-%m-%d %H:%M:%S UTC") if dt else "N/A"
         )
+        self._env.filters["json_script"] = _json_for_script
 
     @staticmethod
     def _format_size(size_bytes: int) -> str:
@@ -141,36 +166,21 @@ class ReportBuilder:
                 "medium": "#ca8a04",
                 "low": "#16a34a",
             },
-            # SHAP values as JSON for the JavaScript chart renderer
-            "shap_data_json": json.dumps(
-                [
-                    {
-                        "pid": v.pid,
-                        "name": v.name,
-                        "threat_score": v.threat_score,
-                        "shap_values": v.shap_values,
-                        "is_malicious": v.is_malicious,
-                    }
-                    for v in report.ranked_processes[:20]
-                    if v.shap_values
-                ]
-            ),
-            # Timeline events as JSON for the interactive canvas chart
-            "timeline_json": json.dumps(
-                [
-                    {
-                        "idx": i,
-                        "ts": e.timestamp.timestamp() if e.timestamp else 0,
-                        "pid": e.pid,
-                        "process_name": e.process_name,
-                        "severity": e.severity,
-                        "mitre_technique": e.mitre_technique or "",
-                        "mitre_technique_name": e.mitre_technique_name or "",
-                        "description": e.description,
-                    }
-                    for i, e in enumerate(sorted(report.timeline, key=lambda ev: ev.timestamp))
-                ]
-            ),
+            # Timeline events as JSON for the interactive canvas chart.  The
+            # json_script filter serialises AND escapes for <script> context.
+            "timeline_json": [
+                {
+                    "idx": i,
+                    "ts": e.timestamp.timestamp() if e.timestamp else 0,
+                    "pid": e.pid,
+                    "process_name": e.process_name,
+                    "severity": e.severity,
+                    "mitre_technique": e.mitre_technique or "",
+                    "mitre_technique_name": e.mitre_technique_name or "",
+                    "description": e.description,
+                }
+                for i, e in enumerate(sorted(report.timeline, key=lambda ev: ev.timestamp))
+            ],
         }
 
         try:
