@@ -128,6 +128,7 @@ class STIXExporter:
 
         # ── AttackPattern objects per MITRE technique ─────────────────────────
         attack_pattern_by_id: dict[str, Any] = {}
+        technique_pids_by_id: dict[str, list[int]] = {}
         for tech in report.mitre_techniques:
             tech_id = tech.get("technique_id", "")
             tech_name = tech.get("technique_name", tech_id)
@@ -147,14 +148,18 @@ class STIXExporter:
                     ],
                 )
                 attack_pattern_by_id[tech_id] = ap
+                technique_pids_by_id[tech_id] = tech.get("observed_pids", [])
                 objects.append(ap)
             except Exception as exc:
                 log.warning("Failed to create STIX AttackPattern", tech_id=tech_id, error=str(exc))
 
         # ── Relationships: Malware uses AttackPattern ─────────────────────────
-        # Link all malicious processes to all MITRE techniques (conservative)
-        for _, mal_obj in malware_by_pid.items():
-            for _, ap_obj in attack_pattern_by_id.items():
+        # Link each malicious process only to the techniques it was actually
+        # observed exhibiting (via observed_pids), not a cartesian cross-product.
+        for pid, mal_obj in malware_by_pid.items():
+            for tech_id, ap_obj in attack_pattern_by_id.items():
+                if pid not in technique_pids_by_id.get(tech_id, []):
+                    continue
                 try:
                     rel = stix2.Relationship(
                         relationship_type="uses",
@@ -172,9 +177,12 @@ class STIXExporter:
             try:
                 yara_ind = stix2.Indicator(
                     name=f"YARA: {yara_result.rule_name}",
-                    description=f"ForensIQ-generated YARA rule for process '{yara_result.process_name}'",
-                    pattern="[file:content_ref = 'placeholder']",  # YARA not STIX native
-                    pattern_type="stix",
+                    description=(
+                        f"ForensIQ-generated YARA rule for process"
+                        f" '{yara_result.process_name}'"
+                    ),
+                    pattern=yara_result.rule_text,
+                    pattern_type="yara",
                     indicator_types=["malicious-activity"],
                     valid_from=now,
                     labels=["yara-rule", "forensiq-detection"],
@@ -200,8 +208,13 @@ class STIXExporter:
             objects.append(placeholder)
             report_obj_refs = [placeholder.id]
 
+        dump_basename = (
+            report.metadata.dump_path.rsplit("/", 1)[-1]
+            if "/" in report.metadata.dump_path
+            else report.metadata.dump_path
+        )
         report_obj = stix2.Report(
-            name=f"ForensIQ Memory Analysis — {report.metadata.dump_path.rsplit('/', 1)[-1] if '/' in report.metadata.dump_path else report.metadata.dump_path}",
+            name=f"ForensIQ Memory Analysis — {dump_basename}",
             description=(
                 f"ForensIQ automated memory forensics analysis. "
                 f"Total processes: {report.total_processes}. "

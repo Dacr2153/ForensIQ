@@ -56,7 +56,7 @@ class TestSTIXExporter:
         mock_report.malicious_count = 0
         mock_report.suspicious_count = 0
         mock_report.threat_level = "low"
-        mock_report.metadata.dump_path = "/tmp/test.raw"  # noqa: S108
+        mock_report.metadata.dump_path = "/tmp/test.raw"
 
         # Patch stix2 import to raise ImportError
         with patch.dict(sys.modules, {"stix2": None}):
@@ -103,7 +103,7 @@ class TestSTIXExporter:
         mock_report.malicious_count = 1
         mock_report.suspicious_count = 2
         mock_report.threat_level = "high"
-        mock_report.metadata.dump_path = "/tmp/MemoryDump_Lab1.raw"  # noqa: S108
+        mock_report.metadata.dump_path = "/tmp/MemoryDump_Lab1.raw"
 
         out_path = exp.export(mock_report, output_dir=tmp_path)
 
@@ -350,7 +350,12 @@ class TestTUIMenu:
 # ── STIXExporter.export() integration tests ────────────────────────────────────
 
 
-def _make_stix_report(malicious: bool = True, add_yara: bool = False, add_mitre: bool = False):
+def _make_stix_report(
+    malicious: bool = True,
+    add_yara: bool = False,
+    add_mitre: bool = False,
+    observed_pids: list[int] | None = None,
+):
     """Build a minimal ForensiqReport for STIX export tests."""
     from datetime import UTC, datetime
 
@@ -387,7 +392,12 @@ def _make_stix_report(malicious: bool = True, add_yara: bool = False, add_mitre:
     mitre_techniques = []
     if add_mitre:
         mitre_techniques = [
-            {"technique_id": "T1055", "technique_name": "Process Injection", "description": "Injection"},
+            {
+                "technique_id": "T1055",
+                "technique_name": "Process Injection",
+                "description": "Injection",
+                "observed_pids": observed_pids if observed_pids is not None else [1234],
+            },
         ]
 
     return ForensiqReport(
@@ -458,6 +468,71 @@ class TestSTIXExporterExport:
         # Should contain Malware, AttackPattern, Relationship, Report objects
         types = {obj["type"] for obj in bundle_data["objects"]}
         assert "attack-pattern" in types
+
+    def test_export_relationship_only_for_observed_pid(self, tmp_path) -> None:
+        """Malware→AttackPattern 'uses' edges exist only for the observing PID,
+        not a cartesian cross-product of all malware and all techniques."""
+        try:
+            import stix2  # noqa: F401
+        except ImportError:
+            import pytest
+            pytest.skip("stix2 not installed")
+        from forensiq.reporting.stix_exporter import STIXExporter
+
+        # Technique observed on a DIFFERENT pid than the malicious process (1234)
+        report = _make_stix_report(malicious=True, add_mitre=True, observed_pids=[9999])
+        exporter = STIXExporter()
+        result = exporter.export(report, tmp_path)
+        bundle_data = json.loads(result.read_text())
+        uses = [
+            obj
+            for obj in bundle_data["objects"]
+            if obj["type"] == "relationship" and obj["relationship_type"] == "uses"
+        ]
+        assert uses == []
+
+    def test_export_uses_relationship_for_matching_pid(self, tmp_path) -> None:
+        """A malicious process IS linked to a technique observed on its PID."""
+        try:
+            import stix2  # noqa: F401
+        except ImportError:
+            import pytest
+            pytest.skip("stix2 not installed")
+        from forensiq.reporting.stix_exporter import STIXExporter
+
+        report = _make_stix_report(malicious=True, add_mitre=True, observed_pids=[1234])
+        exporter = STIXExporter()
+        result = exporter.export(report, tmp_path)
+        bundle_data = json.loads(result.read_text())
+        uses = [
+            obj
+            for obj in bundle_data["objects"]
+            if obj["type"] == "relationship" and obj["relationship_type"] == "uses"
+        ]
+        assert len(uses) == 1
+
+    def test_export_yara_indicator_carries_rule_text(self, tmp_path) -> None:
+        """YARA Indicators embed the real rule text with pattern_type='yara',
+        not a placeholder STIX pattern."""
+        try:
+            import stix2  # noqa: F401
+        except ImportError:
+            import pytest
+            pytest.skip("stix2 not installed")
+        from forensiq.reporting.stix_exporter import STIXExporter
+
+        report = _make_stix_report(malicious=True, add_yara=True)
+        exporter = STIXExporter()
+        result = exporter.export(report, tmp_path)
+        bundle_data = json.loads(result.read_text())
+        yara_inds = [
+            obj for obj in bundle_data["objects"] if obj.get("pattern_type") == "yara"
+        ]
+        assert len(yara_inds) == 1
+        ind = yara_inds[0]
+        assert ind["name"] == "YARA: forensiq_evil_1234"
+        assert 'strings: $s = "evil"' in ind["pattern"]
+        assert "placeholder" not in ind["pattern"]
 
     def test_export_bundle_is_valid_json(self, tmp_path) -> None:
         try:
