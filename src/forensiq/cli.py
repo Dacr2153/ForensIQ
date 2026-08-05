@@ -140,8 +140,9 @@ def analyze(
             "[bold cyan]ForensIQ[/bold cyan] — Memory Forensics & Threat Hunting Platform\n\n"
             f"[dim]Dump   :[/dim] [cyan]{dump}[/cyan]\n"
             f"[dim]Output :[/dim] [cyan]{output}[/cyan]\n\n"
-            "[dim]Pipeline stages: extraction \u2192 feature engineering \u2192 ML classification"
-            " \u2192 SHAP explanation \u2192 detector plugins \u2192 MITRE ATT&CK mapping \u2192 report generation[/dim]",
+            "[dim]Pipeline stages: extraction \u2192 feature engineering \u2192 ML"
+            " classification \u2192 SHAP explanation \u2192 detector plugins \u2192 MITRE"
+            " ATT&CK mapping \u2192 report generation[/dim]",
             border_style="cyan",
             padding=(0, 1),
         )
@@ -217,6 +218,18 @@ def analyze(
         err_console.print(f"[red]Analysis failed:[/red] {result.error}")
         _print_troubleshooting_hint()
         raise typer.Exit(code=2)
+
+    # ── Degraded result: report produced but ML classification unavailable ───
+    if result.exit_code == 3 or result.degraded_reason:
+        err_console.print(
+            "[yellow]Warning:[/yellow] Analysis completed but ML classification"
+            " was NOT applied — results are degraded.[/yellow]"
+        )
+        err_console.print(f"[yellow]          {result.degraded_reason}[/yellow]")
+        err_console.print(
+            "[yellow]          Do not treat this as a clean result. "
+            "See 'forensiq train --help' to build a model.[/yellow]"
+        )
 
     # ── Cached result: no report object ──────────────────────────────────────
     if result.report is None and result.exit_code in (0, 1):
@@ -311,7 +324,10 @@ def _print_summary(report, result) -> None:  # type: ignore[no-untyped-def]
     if report.top_threats:
         table = Table(
             title="Top Threats by Score",
-            caption="Malfind = injected memory regions  |  VAD RWX = executable writable segments  |  Ext. Conns = external network connections",
+            caption=(
+                "Malfind = injected memory regions  |  VAD RWX = executable writable "
+                "segments  |  Ext. Conns = external network connections"
+            ),
             box=box.SIMPLE_HEAD,
             show_header=True,
             header_style="bold cyan",
@@ -789,12 +805,14 @@ def check() -> None:
         console.print(
             "[yellow]linux-hardened: /proc/kcore disabled.[/yellow]\n"
             "Build tools found. Auto-build LiME: [cyan]sudo forensiq live --build-lime[/cyan]\n"
-            "Manual build: [dim]git clone https://github.com/504ensicsLabs/LiME && make -C LiME/src[/dim]"
+            "Manual build: [dim]git clone https://github.com/504ensicsLabs/LiME"
+            " && make -C LiME/src[/dim]"
         )
     elif live.get("kernel_hardened"):
         console.print(
             "[yellow]linux-hardened: /proc/kcore disabled.[/yellow]\n"
-            "Build from source: [cyan]git clone https://github.com/504ensicsLabs/LiME && make -C LiME/src[/cyan]\n"
+            "Build from source: [cyan]git clone https://github.com/504ensicsLabs/LiME"
+            " && make -C LiME/src[/cyan]\n"
             "Then: [cyan]sudo forensiq live --lime --lime-module LiME/src/lime.ko[/cyan]"
         )
     else:
@@ -922,7 +940,7 @@ def live(
         try:
             isf_path = build_linux_isf(progress_cb=lambda msg: console.print(f"  [dim]{msg}[/dim]"))
             console.print(f"[green]ISF built:[/green] {isf_path}")
-        except (RuntimeError, Exception) as exc:
+        except Exception as exc:
             err_console.print(f"[red]ISF build failed:[/red] {exc}")
             raise typer.Exit(code=2) from exc
         raise typer.Exit(code=0)
@@ -989,7 +1007,8 @@ def live(
 
         console.print(
             Panel(
-                "[bold cyan]ForensIQ[/bold cyan] Memory Forensics — [bold red]LIVE MODE (LiME)[/bold red]\n"
+                "[bold cyan]ForensIQ[/bold cyan] Memory Forensics — "
+                "[bold red]LIVE MODE (LiME)[/bold red]\n"
                 f"[dim]Module:[/dim]  [cyan]{lime_mod}[/cyan]\n"
                 f"[dim]Dump:[/dim]    [cyan]{dump_path}[/cyan]\n"
                 f"[dim]Output:[/dim]  [cyan]{output}[/cyan]",
@@ -1028,8 +1047,10 @@ def live(
                 else:
                     advice = (
                         "\n\n[yellow]linux-hardened disables CONFIG_PROC_KCORE.[/yellow]\n"
-                        "Build LiME: [dim]git clone https://github.com/504ensicsLabs/LiME && make -C LiME/src[/dim]\n"
-                        "Then use:   [cyan]sudo forensiq live --lime --lime-module LiME/src/lime.ko[/cyan]"
+                        "Build LiME: [dim]git clone https://github.com/504ensicsLabs/LiME"
+                        " && make -C LiME/src[/dim]\n"
+                        "Then use:   [cyan]sudo forensiq live --lime "
+                        "--lime-module LiME/src/lime.ko[/cyan]"
                     )
             console.print(
                 Panel(
@@ -1050,8 +1071,10 @@ def live(
 
         console.print(
             Panel(
-                "[bold cyan]ForensIQ[/bold cyan] Memory Forensics — [bold red]LIVE MODE (/proc/kcore)[/bold red]\n"
-                f"[dim]Source:[/dim] [cyan]{dump_source}[/cyan]  [dim](live Linux kernel memory)[/dim]\n"
+                "[bold cyan]ForensIQ[/bold cyan] Memory Forensics — "
+                "[bold red]LIVE MODE (/proc/kcore)[/bold red]\n"
+                f"[dim]Source:[/dim] [cyan]{dump_source}[/cyan]  "
+                f"[dim](live Linux kernel memory)[/dim]\n"
                 f"[dim]Output:[/dim] [cyan]{output}[/cyan]",
                 border_style="red",
                 padding=(0, 1),

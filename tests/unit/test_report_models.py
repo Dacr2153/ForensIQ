@@ -5,21 +5,19 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-
 from forensiq.models.features import ProcessFeatureVector
 from forensiq.models.report import DumpMetadata, ForensiqReport, ThreatEvent, YARAResult
-
 
 # ── DumpMetadata ──────────────────────────────────────────────────────────────
 
 
 def _make_metadata(**kwargs) -> DumpMetadata:
-    defaults = dict(
-        dump_path="/dumps/mem.raw",
-        dump_sha256="a" * 64,
-        dump_size_bytes=1024 * 1024 * 1024,  # 1 GB
-        analysis_start=datetime(2024, 1, 1, tzinfo=UTC),
-    )
+    defaults = {
+        "dump_path": "/dumps/mem.raw",
+        "dump_sha256": "a" * 64,
+        "dump_size_bytes": 1024 * 1024 * 1024,  # 1 GB
+        "analysis_start": datetime(2024, 1, 1, tzinfo=UTC),
+    }
     defaults.update(kwargs)
     return DumpMetadata(**defaults)
 
@@ -65,7 +63,11 @@ class TestDumpMetadata:
 # ── ForensiqReport computed fields ────────────────────────────────────────────
 
 
-def _make_pvec(is_malicious: bool = False, threat_score: float = 0.5, pid: int = 1) -> ProcessFeatureVector:
+def _make_pvec(
+    is_malicious: bool = False,
+    threat_score: float = 0.5,
+    pid: int = 1,
+) -> ProcessFeatureVector:
     return ProcessFeatureVector(
         pid=pid,
         name="evil.exe",
@@ -96,9 +98,9 @@ def _make_yara_result(is_valid: bool = True) -> YARAResult:
 
 
 def _make_report(**kwargs) -> ForensiqReport:
-    defaults = dict(
-        metadata=_make_metadata(),
-    )
+    defaults = {
+        "metadata": _make_metadata(),
+    }
     defaults.update(kwargs)
     return ForensiqReport(**defaults)
 

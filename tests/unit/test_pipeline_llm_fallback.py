@@ -11,12 +11,14 @@ Covers:
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from forensiq.models.features import ProcessFeatureVector
 from forensiq.pipeline.analysis_pipeline import AnalysisPipeline
+from forensiq.pipeline.dump_context import DumpContext
 
 
 def _vec(**kwargs) -> ProcessFeatureVector:
@@ -57,6 +59,16 @@ def _make_extraction() -> MagicMock:
     extraction.process_tree = MagicMock()
     extraction.process_tree.flat_map = {}
     return extraction
+
+
+def _ctx() -> DumpContext:
+    """A non-Linux DumpContext so classification proceeds (Windows path)."""
+    return DumpContext(
+        dump_path=Path("/dumps/test.raw"),
+        is_linux=False,
+        threshold=0.65,
+        correlation_id="test",
+    )
 
 
 def _make_pipeline(**kwargs) -> AnalysisPipeline:
@@ -235,7 +247,7 @@ class TestRunWithoutLLM:
         pipeline._check_sha256_cache = AsyncMock(return_value=None)
         pipeline._run_extraction = AsyncMock(return_value=_make_extraction())
         pipeline._run_feature_engineering = MagicMock(return_value=vectors)
-        pipeline._run_classification = MagicMock(return_value=vectors)
+        pipeline._run_classification = MagicMock(return_value=(vectors, ""))
         pipeline._run_explanation = MagicMock(return_value=vectors)
         pipeline._run_detectors = MagicMock(return_value=[])
         pipeline._persist_to_database = AsyncMock()
@@ -260,3 +272,258 @@ class TestRunWithoutLLM:
         assert result.report.llm_info["status"] == "unavailable"
         assert result.report.llm_info["model"] == ""
         assert result.report.executive_summary.strip() != ""
+
+    @pytest.mark.asyncio
+    async def test_run_records_real_analysis_duration(self, tmp_path) -> None:
+        """analysis_start/end must span the whole run (not both 'now' at the end)."""
+        pipeline = _make_pipeline()
+        vectors = [_vec()]
+
+        pipeline._check_sha256_cache = AsyncMock(return_value=None)
+        pipeline._run_extraction = AsyncMock(return_value=_make_extraction())
+        pipeline._run_feature_engineering = MagicMock(return_value=vectors)
+        pipeline._run_classification = MagicMock(return_value=(vectors, ""))
+        pipeline._run_explanation = MagicMock(return_value=vectors)
+        pipeline._run_detectors = MagicMock(return_value=[])
+        pipeline._persist_to_database = AsyncMock()
+
+        with patch.object(
+            pipeline,
+            "_resolve_ollama_client",
+            new=AsyncMock(return_value=(None, None)),
+        ), patch.object(
+            pipeline,
+            "_run_yara_generation",
+            new=AsyncMock(return_value=[]),
+        ):
+            result = await pipeline.run(
+                dump_path=tmp_path / "test.raw",
+                output_dir=tmp_path,
+                correlation_id="duration-test",
+            )
+
+        assert result.report is not None
+        start = result.report.metadata.analysis_start
+        end = result.report.metadata.analysis_end
+        assert end is not None
+        assert end > start
+        assert result.report.metadata.analysis_duration_seconds > 0
+
+    @pytest.mark.asyncio
+    async def test_run_forwards_precomputed_hash_to_extraction(self, tmp_path) -> None:
+        """The hash computed by the cache check is reused, avoiding a second read."""
+        pipeline = _make_pipeline()
+        vectors = [_vec()]
+
+        pipeline._check_sha256_cache = AsyncMock(return_value=None)
+        extraction = _make_extraction()
+        pipeline._run_feature_engineering = MagicMock(return_value=vectors)
+        pipeline._run_classification = MagicMock(return_value=(vectors, ""))
+        pipeline._run_explanation = MagicMock(return_value=vectors)
+        pipeline._run_detectors = MagicMock(return_value=[])
+        pipeline._persist_to_database = AsyncMock()
+
+        # Simulate the precomputed hash being set by the cache pre-check
+        pipeline._precomputed_sha256 = "b" * 64
+
+        mock_orch = MagicMock()
+        mock_orch.run_async = AsyncMock(return_value=extraction)
+
+        with patch.object(
+            pipeline,
+            "_resolve_ollama_client",
+            new=AsyncMock(return_value=(None, None)),
+        ), patch.object(
+            pipeline,
+            "_run_yara_generation",
+            new=AsyncMock(return_value=[]),
+        ), patch(
+            "forensiq.pipeline.analysis_pipeline.ExtractionOrchestrator",
+            return_value=mock_orch,
+        ) as mock_orch_cls:
+            await pipeline.run(
+                dump_path=tmp_path / "test.raw",
+                output_dir=tmp_path,
+                correlation_id="hash-reuse-test",
+            )
+
+        _, kwargs = mock_orch_cls.call_args
+        assert kwargs["precomputed_sha256"] == "b" * 64
+
+
+# ── _run_classification — degraded signalling ─────────────────────────────────
+
+
+class TestRunClassificationDegraded:
+    def _make_pipeline(self) -> AnalysisPipeline:
+        return _make_pipeline()
+
+    def test_returns_clean_pair_when_model_available_and_loads(
+        self, tmp_path: Path
+    ) -> None:
+        from forensiq.config.settings import Settings
+
+        pipeline = self._make_pipeline()
+        model_path = tmp_path / "model.joblib"
+        model_path.write_bytes(b"not really a model")
+        pipeline._settings = Settings(MODEL_PATH=str(model_path), _env_file=None)
+
+        fake_classifier = MagicMock()
+        classified = [_vec(threat_score=0.1)]
+        fake_classifier.predict_batch.return_value = classified
+
+        with patch(
+            "forensiq.pipeline.analysis_pipeline.ForensiqClassifier",
+            return_value=fake_classifier,
+        ):
+            result, reason = pipeline._run_classification([_vec()], ctx=_ctx())
+
+        assert reason == ""
+        assert result == classified
+
+    def test_returns_degraded_reason_when_model_missing(self, tmp_path: Path) -> None:
+        from forensiq.config.settings import Settings
+
+        pipeline = self._make_pipeline()
+        pipeline._settings = Settings(
+            MODEL_PATH=str(tmp_path / "no_such_model.joblib"), _env_file=None
+        )
+
+        result, reason = pipeline._run_classification([_vec()], ctx=_ctx())
+
+        assert reason.startswith("ML model not found")
+        assert len(result) == 1
+
+    def test_returns_degraded_reason_on_classification_error(self, tmp_path: Path) -> None:
+        from forensiq.config.settings import Settings
+
+        pipeline = self._make_pipeline()
+        corrupt_path = tmp_path / "corrupt.joblib"
+        corrupt_path.write_bytes(b"not really a model")
+        pipeline._settings = Settings(MODEL_PATH=str(corrupt_path), _env_file=None)
+
+        fake_classifier = MagicMock()
+        fake_classifier.predict_batch.side_effect = ValueError("model corrupt")
+
+        with patch(
+            "forensiq.pipeline.analysis_pipeline.ForensiqClassifier",
+            return_value=fake_classifier,
+        ):
+            result, reason = pipeline._run_classification([_vec()], ctx=_ctx())
+
+        assert "failed" in reason
+        assert len(result) == 1
+
+    def test_skips_linux_dump_without_degredation(self, tmp_path: Path) -> None:
+        from forensiq.pipeline.dump_context import DumpContext
+
+        pipeline = self._make_pipeline()
+        linux_ctx = DumpContext(
+            dump_path=Path("/proc/kcore"),
+            is_linux=True,
+            threshold=0.65,
+            correlation_id="x",
+        )
+        result, reason = pipeline._run_classification([_vec()], ctx=linux_ctx)
+
+        assert reason == ""
+        assert len(result) == 1
+
+
+# ── run() — degraded exit-code signalling ─────────────────────────────────────
+
+
+class TestRunDegradedExitCode:
+    @pytest.mark.asyncio
+    async def test_degraded_clean_run_exits_3_with_reason(self, tmp_path) -> None:
+        pipeline = _make_pipeline()
+        vectors = [_vec()]
+
+        pipeline._check_sha256_cache = AsyncMock(return_value=None)
+        pipeline._run_extraction = AsyncMock(return_value=_make_extraction())
+        pipeline._run_feature_engineering = MagicMock(return_value=vectors)
+        pipeline._run_classification = MagicMock(return_value=(vectors, "ML model not found"))
+        pipeline._run_explanation = MagicMock(return_value=vectors)
+        pipeline._run_detectors = MagicMock(return_value=[])
+        pipeline._persist_to_database = AsyncMock()
+
+        with patch.object(
+            pipeline,
+            "_resolve_ollama_client",
+            new=AsyncMock(return_value=(None, None)),
+        ), patch.object(
+            pipeline,
+            "_run_yara_generation",
+            new=AsyncMock(return_value=[]),
+        ):
+            result = await pipeline.run(
+                dump_path=tmp_path / "test.raw",
+                output_dir=tmp_path,
+                correlation_id="test123",
+            )
+
+        assert result.exit_code == 3
+        assert result.degraded_reason == "ML model not found"
+        assert result.report is not None
+        assert result.report.degraded_reason == "ML model not found"
+
+    @pytest.mark.asyncio
+    async def test_degraded_with_malicious_still_exits_1(self, tmp_path) -> None:
+        pipeline = _make_pipeline()
+        vectors = [_vec(is_malicious=True, threat_score=0.9)]
+
+        pipeline._check_sha256_cache = AsyncMock(return_value=None)
+        pipeline._run_extraction = AsyncMock(return_value=_make_extraction())
+        pipeline._run_feature_engineering = MagicMock(return_value=vectors)
+        pipeline._run_classification = MagicMock(return_value=(vectors, "ML model corrupt"))
+        pipeline._run_explanation = MagicMock(return_value=vectors)
+        pipeline._run_detectors = MagicMock(return_value=[])
+        pipeline._persist_to_database = AsyncMock()
+
+        with patch.object(
+            pipeline,
+            "_resolve_ollama_client",
+            new=AsyncMock(return_value=(None, None)),
+        ), patch.object(
+            pipeline,
+            "_run_yara_generation",
+            new=AsyncMock(return_value=[]),
+        ):
+            result = await pipeline.run(
+                dump_path=tmp_path / "test.raw",
+                output_dir=tmp_path,
+                correlation_id="test123",
+            )
+
+        assert result.exit_code == 1
+        assert result.report is not None
+        assert result.report.degraded_reason == "ML model corrupt"
+
+
+# ── _check_sha256_cache — precomputed hash reuse ──────────────────────────────
+
+
+class TestCheckSha256Cache:
+    @pytest.mark.asyncio
+    async def test_sets_precomputed_sha256(self, tmp_path) -> None:
+        """The cache check stores the computed hash for reuse by extraction."""
+        pipeline = _make_pipeline()
+        dump_file = tmp_path / "mem.raw"
+        dump_file.write_bytes(b"forensic dump content for hashing")
+
+        from unittest.mock import AsyncMock
+
+        mock_db_instance = MagicMock()
+        mock_db_instance.__aenter__ = AsyncMock(return_value=mock_db_instance)
+        mock_db_instance.__aexit__ = AsyncMock(return_value=None)
+        mock_db_instance.get_analysis_by_sha256 = AsyncMock(return_value=None)
+
+        with patch(
+            "forensiq.db.manager.ForensiqDatabase", return_value=mock_db_instance
+        ):
+            cached = await pipeline._check_sha256_cache(dump_file)
+
+        assert cached is None
+        assert pipeline._precomputed_sha256 == (
+            "b12cfdfb8549c5933d89c2e55222a47edb94881730c9ee0da6286e05379942e7"
+        )

@@ -208,7 +208,10 @@ class ForensiqReport(BaseModel):
     )
     suspicious_count: int = Field(
         default=0,
-        description="Number of processes above the anomaly threshold (but below classification threshold)",
+        description=(
+            "Number of processes above the anomaly threshold"
+            " (but below classification threshold)"
+        ),
         ge=0,
     )
     malicious_count: int = Field(
@@ -259,6 +262,16 @@ class ForensiqReport(BaseModel):
     llm_info: dict[str, str] = Field(
         default_factory=dict,
         description="Ollama model resolution info: resolved model, status, requested model.",
+    )
+
+    # ─── Analysis degradation ─────────────────────────────────────────────────
+    # Non-empty when the ML classification stage could not apply the XGBoost
+    # model (missing, corrupt, or failed to load/predict).  A report with this
+    # field set must NOT be treated as a clean result: process threat scores
+    # were never produced by the classifier.
+    degraded_reason: str = Field(
+        default="",
+        description="Reason ML classification could not be applied (empty = healthy run).",
     )
 
     # ─── Detector plugin findings ─────────────────────────────────────────────

@@ -32,7 +32,7 @@ import asyncio
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -135,8 +135,11 @@ class PipelineResult:
         report_path: Path to the generated HTML report.
         json_path: Path to the generated JSON report.
         yara_dir: Path to exported YARA rule files.
-        exit_code: 0=clean, 1=threats found, 2=analysis error.
+        exit_code: 0=clean, 1=threats found, 2=analysis error,
+            3=analysis degraded (ML model unavailable / classification failed).
         error: Error message if exit_code == 2.
+        degraded_reason: Non-empty when exit_code == 3; explains why ML
+            classification could not be applied (e.g. model missing or corrupt).
     """
 
     report: ForensiqReport | None = None
@@ -145,6 +148,7 @@ class PipelineResult:
     yara_dir: Path | None = None
     exit_code: int = 0
     error: str = ""
+    degraded_reason: str = ""
 
 
 class AnalysisPipeline:
@@ -188,6 +192,9 @@ class AnalysisPipeline:
         # Set when extraction raises, so _build_extraction_error() can surface
         # the underlying cause in the "Analysis failed" message.
         self._extraction_exception: Exception | None = None
+        # SHA-256 of the dump computed during the cache pre-check, reused by
+        # extraction so the full file is only read once per run.
+        self._precomputed_sha256 = ""
 
     def _emit(self, stage: str, data: Any) -> None:
         """Emit a streaming event to the registered callback (if any)."""
@@ -207,7 +214,8 @@ class AnalysisPipeline:
         """Run the complete analysis pipeline.
 
         Args:
-            dump_path: Absolute path to the memory dump file (Windows raw/vmem/dmp or Linux LiME/kcore).
+            dump_path: Absolute path to the memory dump file (Windows raw/vmem/dmp or
+                Linux LiME/kcore).
             output_dir: Directory where reports and YARA rules are saved.
             threshold: Override the configured threat threshold (0.0-1.0).
             correlation_id: Optional correlation ID for log tracing.
@@ -236,6 +244,7 @@ class AnalysisPipeline:
             )
 
             start_time = time.monotonic()
+            analysis_started_at = datetime.now(tz=UTC)
 
             # ── Phase 0: SHA-256 Cache Check ──────────────────────────────
             # Compute SHA-256 of the dump before running any plugins.
@@ -289,7 +298,7 @@ class AnalysisPipeline:
 
             # ── Phase 3: Classification ────────────────────────────────────
             set_phase("classification")
-            vectors = self._run_classification(vectors, ctx)
+            vectors, degraded_reason = self._run_classification(vectors, ctx)
             # Streaming: emit classified vectors so CLI can show partial results
             self._emit("classification", vectors)
 
@@ -375,13 +384,11 @@ class AnalysisPipeline:
             except Exception:
                 forensiq_version = "dev"
 
-            from datetime import datetime
-
             metadata = DumpMetadata(
                 dump_path=str(dump_path.resolve()),
                 dump_sha256=extraction.dump_sha256 or "",
                 dump_size_bytes=extraction.dump_size_bytes,
-                analysis_start=datetime.now(tz=UTC),
+                analysis_start=analysis_started_at,
                 analysis_end=datetime.now(tz=UTC),
                 volatility_version=extraction.volatility_version or "unknown",
                 forensiq_version=forensiq_version,
@@ -427,6 +434,7 @@ class AnalysisPipeline:
                 yara_results=yara_results,
                 model_info=model_info,
                 llm_info=llm_info,
+                degraded_reason=degraded_reason,
                 detector_findings=[f.to_dict() for f in detector_findings],
                 mitre_techniques=mitre_techniques,
                 dll_yara_hits=[
@@ -474,7 +482,14 @@ class AnalysisPipeline:
                 result.yara_dir = yara_dir
 
             # ── Final exit code ────────────────────────────────────────────
+            # 0=clean, 1=threats found, 2=analysis error, 3=degraded.
+            # Degraded (exit 3) wins over clean (0): if classification could not
+            # run we must never report a silent "clean" result.
             result.exit_code = 1 if len(malicious_processes) > 0 else 0
+            if degraded_reason:
+                result.degraded_reason = degraded_reason
+                if result.exit_code == 0:
+                    result.exit_code = 3
 
             elapsed = time.monotonic() - start_time
             log.info(
@@ -513,6 +528,7 @@ class AnalysisPipeline:
             return None
 
         log.info("Dump SHA-256 computed", sha256=sha256[:16], dump=dump_path.name)
+        self._precomputed_sha256 = sha256
 
         try:
             from forensiq.db.manager import ForensiqDatabase
@@ -541,6 +557,7 @@ class AnalysisPipeline:
                 dump_path=dump_path,
                 compute_hash=True,
                 show_progress=self._show_progress,
+                precomputed_sha256=self._precomputed_sha256,
             )
             # True async — no run_in_executor needed; each plugin is a subprocess
             extraction = await orchestrator.run_async()
@@ -646,10 +663,15 @@ class AnalysisPipeline:
         self,
         vectors: list[ProcessFeatureVector],
         ctx: DumpContext,
-    ) -> list[ProcessFeatureVector]:
+    ) -> tuple[list[ProcessFeatureVector], str]:
         """Run XGBoost classification on all process feature vectors.
 
-        Falls back gracefully if model is not available (returns vectors unchanged).
+        The return value is a ``(vectors, degraded_reason)`` pair.  A non-empty
+        ``degraded_reason`` means the ML model could not be applied (missing or
+        failed to load/predict); the caller must surface this in the report and
+        signal a non-zero exit code so a "clean" result is never silently
+        reported when the classifier did not actually run.
+
         Skips the Windows-trained XGBoost model entirely for Linux dumps: the model
         was trained on CIC-MalMem2022 (Windows processes) so its scores are
         meaningless on Linux and produce 100% false-positive rates.
@@ -659,25 +681,26 @@ class AnalysisPipeline:
             ctx: Runtime dump context (OS profile + threshold).
 
         Returns:
-            Classified vectors sorted by threat_score descending.
+            (Classified vectors sorted by threat_score descending, degraded_reason).
         """
         if ctx.is_linux:
             log.info(
                 "Linux dump — skipping Windows XGBoost model (CIC-MalMem2022 is Windows-only)",
                 count=len(vectors),
             )
-            return vectors
+            return vectors, ""
 
         classifier = ForensiqClassifier()
         classifier.threshold = ctx.threshold
         model_path = self._settings.get_model_path()
 
         if not self._settings.is_model_available():
-            log.warning(
-                "Model not found — classification skipped, all scores set to 0.0",
-                model_path=str(model_path),
+            reason = (
+                f"ML model not found at {model_path} — classification skipped, "
+                "all process scores set to 0.0"
             )
-            return vectors
+            log.warning("Model not found — classification skipped", model_path=str(model_path))
+            return vectors, reason
 
         try:
             classifier.load_model(model_path)
@@ -689,13 +712,15 @@ class AnalysisPipeline:
                 malicious=malicious_count,
                 threshold=ctx.threshold,
             )
-            return classified
+            return classified, ""
         except ClassificationError as exc:
+            reason = f"ML classification failed: {exc}"
             log.error("Classification failed", error=str(exc))
-            return vectors
+            return vectors, reason
         except Exception as exc:
+            reason = f"ML classification failed unexpectedly: {exc}"
             log.error("Unexpected classification error", error=str(exc))
-            return vectors
+            return vectors, reason
 
     def _run_explanation(
         self,
