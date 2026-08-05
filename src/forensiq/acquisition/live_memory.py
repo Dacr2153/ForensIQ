@@ -43,7 +43,9 @@ import shutil
 import subprocess
 import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from forensiq.utils.logger import get_logger
 
@@ -110,11 +112,6 @@ _LIME_TIMEOUT_SECONDS: int = 300
 
 # Poll interval while waiting for LiME to finish writing the dump
 _LIME_POLL_INTERVAL: float = 2.0
-
-# How long a paused dump is allowed to stay at the same size before the
-# stall timeout actually fires.  Larger than the poll interval so a brief
-# write pause (disk flush, hugepage boundary) is not mistaken for a stall.
-_LIME_STALL_GRACE_SECONDS: float = 10.0
 
 
 # ---------------------------------------------------------------------------
@@ -234,7 +231,7 @@ def check_lime_build_requirements() -> dict[str, bool | str]:
 def build_lime_from_source(
     install_dir: Path | None = None,
     *,
-    progress_callback=None,
+    progress_callback: Callable[[str], None] | None = None,
 ) -> Path:
     """Clone LiME from GitHub and build lime.ko for the current kernel.
 
@@ -364,7 +361,7 @@ def build_lime_from_source(
             decompressed = src_dir / "lime.ko"
             _emit(f"Decompressing {built_ko.name} → lime.ko …")
             if built_ko.suffix == ".zst":
-                decomp = subprocess.run(
+                decomp: subprocess.CompletedProcess[str] = subprocess.run(
                     ["zstd", "-d", str(built_ko), "-o", str(decompressed), "--force"],
                     capture_output=True,
                     text=True,
@@ -374,16 +371,17 @@ def build_lime_from_source(
                 decomp = subprocess.run(
                     ["xz", "-dk", str(built_ko), "--stdout"],
                     capture_output=True,
+                    text=True,
                     timeout=30,
                 )
                 if decomp.returncode == 0:
-                    decompressed.write_bytes(decomp.stdout)
+                    decompressed.write_bytes(decomp.stdout.encode())
             else:  # .gz
                 import gzip
 
                 with gzip.open(str(built_ko), "rb") as _gz:
                     decompressed.write_bytes(_gz.read())
-                decomp = type("_R", (), {"returncode": 0, "stderr": ""})()
+                decomp = subprocess.CompletedProcess([], 0)
 
             if decomp.returncode != 0:
                 err = decomp.stderr if isinstance(decomp.stderr, str) else decomp.stderr.decode()
@@ -482,7 +480,33 @@ def acquire_lime_dump(
     if not lime_module.is_file():
         raise LiveMemoryError(f"LiME module not found: {lime_module}")
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    # ── Security: refuse unsafe output paths before touching the kernel ─────
+    # A memory dump is written by kernel code running as root.  If the output
+    # path is a symlink or an existing non-empty file, a local attacker could
+    # redirect root's write into an arbitrary file (or clobber a real one).
+    if output_path.is_symlink():
+        raise LiveMemoryError(
+            f"Refusing symlink at output path: {output_path}. "
+            "Remove the symlink or choose a different output path."
+        )
+    if output_path.exists() and output_path.stat().st_size > 0:
+        raise LiveMemoryError(
+            f"Refusing to overwrite existing non-empty file: {output_path}. "
+            "Remove it first or choose a different output path."
+        )
+
+    # Create the output directory with private permissions when we create it,
+    # so a partial dump is never world-readable during acquisition.
+    parent = output_path.parent
+    try:
+        created_parent = not parent.exists()
+        parent.mkdir(parents=True, exist_ok=True)
+        if created_parent:
+            parent.chmod(0o700)
+    except OSError as exc:
+        raise LiveMemoryError(
+            f"Cannot create output directory {parent}: {exc}"
+        ) from exc
 
     # insmod requires each module parameter as a separate argv element.
     # Passing them joined in one string causes "Invalid parameters".
@@ -498,7 +522,7 @@ def acquire_lime_dump(
     # for file-size stability rather than waiting for subprocess to return.
     import threading
 
-    insmod_result: dict = {}
+    insmod_result: dict[str, Any] = {}
     insmod_exc: list[Exception] = []
 
     def _run_insmod() -> None:
@@ -525,12 +549,12 @@ def acquire_lime_dump(
         # Give insmod a moment to fail fast (bad params, missing module, etc.)
         thread.join(timeout=3)
         if insmod_exc:
-            exc = insmod_exc[0]
-            if isinstance(exc, FileNotFoundError):
+            insmod_error = insmod_exc[0]
+            if isinstance(insmod_error, FileNotFoundError):
                 raise LiveMemoryError(
                     "'insmod' not found. Install kmod (e.g. pacman -S kmod)."
                 )
-            raise LiveMemoryError(f"insmod error: {exc}")
+            raise LiveMemoryError(f"insmod error: {insmod_error}")
 
         # Check if it already finished with an error (e.g. "Invalid parameters")
         if not thread.is_alive():
@@ -557,15 +581,34 @@ def acquire_lime_dump(
                 pass
             raise LiveMemoryError(
                 f"Timed out ({timeout}s without growth) waiting for LiME "
-                f"dump at {output_path}. The dump may still be in progress "
-                "— check the file size manually."
+                f"dump at {output_path}. The partial dump was removed and the "
+                "LiME module unloaded. Re-run acquisition if you want to retry."
             )
 
         if timeout <= 0:
             _abort_stalled()
 
+        # Lock the dump down to 0600 as soon as the file first appears, so the
+        # partial dump is never left world-readable while it is being written.
+        permissions_locked = False
+
+        def _lock_permissions() -> None:
+            nonlocal permissions_locked
+            if permissions_locked:
+                return
+            try:
+                output_path.chmod(0o600)
+                permissions_locked = True
+            except OSError as exc:
+                log.warning(
+                    "Could not restrict permissions on partial dump",
+                    path=str(output_path),
+                    error=str(exc),
+                )
+
         while True:
             if output_path.exists():
+                _lock_permissions()
                 current_size = output_path.stat().st_size
                 if current_size > 0 and current_size == prev_size:
                     stable_count += 1
@@ -623,7 +666,7 @@ def acquire_lime_dump(
 # ---------------------------------------------------------------------------
 
 
-def check_live_requirements(lime_hint: Path | None = None) -> dict:
+def check_live_requirements(lime_hint: Path | None = None) -> dict[str, Any]:
     """Check all preconditions for live memory analysis.
 
     Checks both /proc/kcore and LiME availability so callers can offer the
@@ -655,7 +698,7 @@ def check_live_requirements(lime_hint: Path | None = None) -> dict:
             - ``kernel_hardened`` (bool): linux-hardened detected
             - ``kcore_compiled_in`` (str): "true"/"false"/"unknown"
     """
-    status: dict = {
+    status: dict[str, Any] = {
         "is_linux": False,
         "kcore_exists": False,
         "kcore_readable": False,

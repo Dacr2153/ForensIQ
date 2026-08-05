@@ -531,27 +531,123 @@ class TestAcquireLimeDump:
 
         assert nested_dir.exists()
 
-    def test_already_loaded_module_with_existing_dump(self, tmp_path: Path) -> None:
-        """If LiME module is already loaded (EEXIST) and dump exists, return it."""
-        from forensiq.acquisition.live_memory import acquire_lime_dump
+    def test_refuses_existing_nonempty_dump(self, tmp_path: Path) -> None:
+        """A pre-existing non-empty dump must never be silently overwritten.
+
+        The dump path is written by kernel code running as root, so an
+        existing file there is either stale data from a prior run (which could
+        be analyzed as fresh) or a trap laid by a local attacker.  Either way
+        acquisition must refuse rather than clobber it.
+        """
+        from forensiq.acquisition.live_memory import LiveMemoryError, acquire_lime_dump
 
         fake_module = tmp_path / "lime.ko"
         fake_module.write_bytes(b"\x7fELF")
         dump_path = tmp_path / "memory.lime"
         dump_path.write_bytes(b"LiME" + b"\x00" * 1024)  # Pre-existing dump
 
-        mock_result = MagicMock()
-        mock_result.returncode = 1
-        mock_result.stderr = "File exists"
+        with patch("os.geteuid", return_value=0):
+            with patch("subprocess.run") as mock_run:
+                with pytest.raises(LiveMemoryError, match="existing non-empty file"):
+                    acquire_lime_dump(
+                        output_path=dump_path,
+                        lime_module=fake_module,
+                        timeout=10,
+                    )
+
+        # No kernel interaction should have happened at all.
+        mock_run.assert_not_called()
+
+    def test_refuses_symlink_output_path(self, tmp_path: Path) -> None:
+        """A symlink at the output path is a TOCTOU write-redirection vector."""
+        from forensiq.acquisition.live_memory import LiveMemoryError, acquire_lime_dump
+
+        fake_module = tmp_path / "lime.ko"
+        fake_module.write_bytes(b"\x7fELF")
+        target = tmp_path / "sensitive_target"
+        target.write_text("do not clobber")
+        dump_path = tmp_path / "memory.lime"
+        dump_path.symlink_to(target)
 
         with patch("os.geteuid", return_value=0):
-            with patch("subprocess.run", return_value=mock_result):
-                result = acquire_lime_dump(
+            with patch("subprocess.run") as mock_run:
+                with pytest.raises(LiveMemoryError, match="symlink"):
+                    acquire_lime_dump(
+                        output_path=dump_path,
+                        lime_module=fake_module,
+                        timeout=10,
+                    )
+
+        mock_run.assert_not_called()
+        assert target.read_text() == "do not clobber"
+
+    def test_creates_output_directory_private_when_new(self, tmp_path: Path) -> None:
+        """A parent directory created for the dump must be 0700 (not world-readable)."""
+        from forensiq.acquisition.live_memory import acquire_lime_dump
+
+        fake_module = tmp_path / "lime.ko"
+        fake_module.write_bytes(b"\x7fELF")
+        nested_dir = tmp_path / "deep" / "nested" / "dir"
+        dump_path = nested_dir / "memory.lime"
+
+        def _side_effect(cmd, *args, **kwargs):
+            if cmd[0] == "insmod":
+                dump_path.write_bytes(b"LiME" + b"\x00" * 512)
+            return MagicMock(returncode=0, stderr="")
+
+        with patch("os.geteuid", return_value=0):
+            with patch("subprocess.run", side_effect=_side_effect):
+                acquire_lime_dump(
                     output_path=dump_path,
                     lime_module=fake_module,
                     timeout=10,
                 )
-        assert result == dump_path
+
+        assert nested_dir.exists()
+        assert (nested_dir.stat().st_mode & 0o777) == 0o700
+
+    def test_sets_0600_permissions_immediately_on_partial_dump(
+        self, tmp_path: Path
+    ) -> None:
+        """The partial dump must be 0600 as soon as it appears, not only at the end.
+
+        A world-readable partial dump would expose raw physical memory while
+        acquisition is still in progress.
+        """
+        from forensiq.acquisition.live_memory import acquire_lime_dump
+
+        fake_module = tmp_path / "lime.ko"
+        fake_module.write_bytes(b"\x7fELF")
+        dump_path = tmp_path / "memory.lime"
+        seen_modes: list[int] = []
+
+        real_chmod = dump_path.chmod
+
+        def _guarded_chmod(self, mode: int) -> None:
+            # Only observe when the file already exists (post-creation chmods).
+            if dump_path.exists():
+                seen_modes.append(mode)
+            real_chmod(mode)
+
+        def _side_effect(cmd, *args, **kwargs):
+            if cmd[0] == "insmod":
+                dump_path.write_bytes(b"LiME" + b"\x00" * 64)
+            return MagicMock(returncode=0, stderr="")
+
+        with patch("os.geteuid", return_value=0):
+            with (
+                patch.object(dump_path.__class__, "chmod", _guarded_chmod),
+                patch("subprocess.run", side_effect=_side_effect),
+            ):
+                acquire_lime_dump(
+                    output_path=dump_path,
+                    lime_module=fake_module,
+                    timeout=10,
+                )
+
+        assert (dump_path.stat().st_mode & 0o777) == 0o600
+        # The first chmod on an existing file must already be 0600 (immediate lock).
+        assert seen_modes and seen_modes[0] == 0o600
 
     def test_rejects_invalid_lime_format(self, tmp_path: Path) -> None:
         """An unknown LiME format must be rejected before anything runs."""
