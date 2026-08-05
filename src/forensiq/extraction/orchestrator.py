@@ -133,12 +133,14 @@ class ExtractionOrchestrator:
         parallel: bool = True,
         max_vad_pids: int = 0,
         is_linux: bool | None = None,
+        precomputed_sha256: str = "",
     ) -> None:
         self.dump_path = dump_path.resolve()
         self.compute_hash = compute_hash
         self.show_progress = show_progress
         self.parallel = parallel
         self.max_vad_pids = max_vad_pids
+        self.precomputed_sha256 = precomputed_sha256
         self._settings = get_settings()
         # Auto-detect Linux from file extension if not explicitly set.
         #   .lime  → LiME (Linux Memory Extractor)
@@ -236,20 +238,26 @@ class ExtractionOrchestrator:
         process_extractor = ProcessExtractor(runner)
 
         if self.compute_hash:
-            hash_task = loop.run_in_executor(None, _compute_sha256, self.dump_path)
-            processes_task = process_extractor.extract_async()
-            try:
-                sha256, process_tree = await asyncio.gather(hash_task, processes_task)
-                result.dump_sha256 = sha256
-                result.process_tree = process_tree
-                # Wire SHA-256 into runner so Stage 2/3 plugins can use the cache
-                runner.dump_sha256 = sha256
-            except Exception as exc:
-                log.error("Stage 1 (async) failed", error=str(exc))
-                raise AcquisitionError(
-                    message=f"Process extraction failed (async): {exc}",
-                    context={"dump_path": str(self.dump_path)},
-                ) from exc
+            if self.precomputed_sha256:
+                # SHA-256 already computed upstream (e.g. pipeline cache check) —
+                # skip the expensive full-file re-read.
+                sha256 = self.precomputed_sha256
+                process_tree = await process_extractor.extract_async()
+            else:
+                hash_task = loop.run_in_executor(None, _compute_sha256, self.dump_path)
+                processes_task = process_extractor.extract_async()
+                try:
+                    sha256, process_tree = await asyncio.gather(hash_task, processes_task)
+                except Exception as exc:
+                    log.error("Stage 1 (async) failed", error=str(exc))
+                    raise AcquisitionError(
+                        message=f"Process extraction failed (async): {exc}",
+                        context={"dump_path": str(self.dump_path)},
+                    ) from exc
+            result.dump_sha256 = sha256
+            result.process_tree = process_tree
+            # Wire SHA-256 into runner so Stage 2/3 plugins can use the cache
+            runner.dump_sha256 = sha256
         else:
             try:
                 result.process_tree = await process_extractor.extract_async()
@@ -354,7 +362,9 @@ class ExtractionOrchestrator:
         # ── Stage 1: SHA-256 + processes (required before anything else) ─────
         def _hash() -> None:
             if self.compute_hash:
-                result.dump_sha256 = _compute_sha256(self.dump_path)
+                result.dump_sha256 = self.precomputed_sha256 or _compute_sha256(
+                    self.dump_path
+                )
 
         def _processes() -> None:
             extractor = ProcessExtractor(
@@ -380,7 +390,10 @@ class ExtractionOrchestrator:
 
         if result.process_tree is None:
             raise AcquisitionError(
-                message=f"Process extraction failed — cannot continue analysis of {self.dump_path.name}",
+                message=(
+                    f"Process extraction failed — cannot continue analysis of"
+                    f" {self.dump_path.name}"
+                ),
                 context={"dump_path": str(self.dump_path), "failed": result.failed_plugins},
             )
 
@@ -574,7 +587,9 @@ class ExtractionOrchestrator:
         def run_hash() -> None:
             if self.compute_hash:
                 log.info("Computing SHA-256 digest", dump=self.dump_path.name)
-                result.dump_sha256 = _compute_sha256(self.dump_path)
+                result.dump_sha256 = self.precomputed_sha256 or _compute_sha256(
+                    self.dump_path
+                )
 
         steps = [
             ("Computing SHA-256", run_hash),

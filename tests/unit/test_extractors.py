@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -167,6 +167,118 @@ class TestParallelExtractorConfig:
 
         assert hasattr(ExtractionOrchestrator, "run_parallel")
         assert hasattr(ExtractionOrchestrator, "run")
+
+
+class TestPrecomputedSha256:
+    """The orchestrator must reuse a precomputed hash instead of re-reading the file."""
+
+    def _patch_extractors(self):
+        """Patch all extractor classes so run_async is fully mocked."""
+        return (
+            patch(
+                "forensiq.extraction.orchestrator.ProcessExtractor",
+                autospec=True,
+            ),
+            patch(
+                "forensiq.extraction.orchestrator.NetworkExtractor",
+                autospec=True,
+            ),
+            patch(
+                "forensiq.extraction.orchestrator.DLLExtractor",
+                autospec=True,
+            ),
+            patch(
+                "forensiq.extraction.orchestrator.VADExtractor",
+                autospec=True,
+            ),
+        )
+
+    @pytest.mark.asyncio
+    async def test_async_skips_recompute_when_precomputed(self, tmp_path) -> None:
+        """run_async uses the precomputed hash and never calls _compute_sha256."""
+        from forensiq.extraction.orchestrator import ExtractionOrchestrator
+
+        dump_file = tmp_path / "mem.raw"
+        dump_file.write_bytes(b"x" * 1024)
+
+        p1, p2, p3, p4 = self._patch_extractors()
+        with p1, p2, p3, p4:
+            from forensiq.extraction import orchestrator as orch_module
+
+            mock_proc = orch_module.ProcessExtractor.return_value
+            proc_tree = MagicMock()
+            proc_tree.flat_map = {100: MagicMock()}
+            mock_proc.extract_async = AsyncMock(return_value=proc_tree)
+
+            orch_module.NetworkExtractor.return_value.extract_async = AsyncMock(
+                return_value={}
+            )
+            orch_module.DLLExtractor.return_value.extract_async = AsyncMock(
+                return_value={}
+            )
+            orch_module.VADExtractor.return_value.extract_malfind_async = AsyncMock(
+                return_value={}
+            )
+            orch_module.VADExtractor.return_value.extract_vad_for_pids_async = (
+                AsyncMock(return_value={})
+            )
+
+            orch = ExtractionOrchestrator(
+                dump_path=dump_file,
+                compute_hash=True,
+                show_progress=False,
+                precomputed_sha256="b" * 64,
+            )
+            with patch.object(
+                orch_module, "_compute_sha256", wraps=orch_module._compute_sha256
+            ) as mock_compute:
+                result = await orch.run_async()
+
+        assert result.dump_sha256 == "b" * 64
+        mock_compute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_async_computes_when_no_precomputed(self, tmp_path) -> None:
+        """Without a precomputed hash, _compute_sha256 is still called."""
+        from forensiq.extraction.orchestrator import ExtractionOrchestrator
+
+        dump_file = tmp_path / "mem.raw"
+        dump_file.write_bytes(b"y" * 2048)
+
+        p1, p2, p3, p4 = self._patch_extractors()
+        with p1, p2, p3, p4:
+            from forensiq.extraction import orchestrator as orch_module
+
+            mock_proc = orch_module.ProcessExtractor.return_value
+            proc_tree = MagicMock()
+            proc_tree.flat_map = {100: MagicMock()}
+            mock_proc.extract_async = AsyncMock(return_value=proc_tree)
+
+            orch_module.NetworkExtractor.return_value.extract_async = AsyncMock(
+                return_value={}
+            )
+            orch_module.DLLExtractor.return_value.extract_async = AsyncMock(
+                return_value={}
+            )
+            orch_module.VADExtractor.return_value.extract_malfind_async = AsyncMock(
+                return_value={}
+            )
+            orch_module.VADExtractor.return_value.extract_vad_for_pids_async = (
+                AsyncMock(return_value={})
+            )
+
+            orch = ExtractionOrchestrator(
+                dump_path=dump_file,
+                compute_hash=True,
+                show_progress=False,
+            )
+            with patch.object(
+                orch_module, "_compute_sha256", wraps=orch_module._compute_sha256
+            ) as mock_compute:
+                result = await orch.run_async()
+
+        assert result.dump_sha256 == orch_module._compute_sha256(dump_file)
+        mock_compute.assert_called_once()
 
 
 # ─── ExecutiveReportGenerator ────────────────────────────────────────────────
