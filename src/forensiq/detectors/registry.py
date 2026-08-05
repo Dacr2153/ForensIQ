@@ -106,7 +106,7 @@ class DetectorRegistry:
         return len(self._detectors)
 
 
-def build_default_registry(is_linux: bool = False) -> DetectorRegistry:
+def build_default_registry(is_linux: bool = False, vt_api_key: str = "") -> DetectorRegistry:
     """Build the default DetectorRegistry with all built-in detectors.
 
     Windows-only detectors (cross_view, services_scan, handles_mutex) are
@@ -114,8 +114,15 @@ def build_default_registry(is_linux: bool = False) -> DetectorRegistry:
     svcscan, handles) only exist in the windows.* Volatility 3 namespace
     and will always fail with exit code 1 on a Linux/LiME dump.
 
+    The ThreatIntelDetector is registered only when a VirusTotal API key is
+    provided (vt_api_key), since it performs network I/O. Without a key it is
+    omitted entirely — MalwareBazaar is only used as a fallback for hashes
+    VirusTotal could not resolve, so VT-first requires the VT key.
+
     Args:
         is_linux: True when analyzing a Linux memory dump.
+        vt_api_key: VirusTotal API v3 key (from FORENSIQ_VT_API_KEY). Empty
+            disables the threat-intel detector.
 
     Returns:
         Configured DetectorRegistry with all enabled detectors.
@@ -138,6 +145,11 @@ def build_default_registry(is_linux: bool = False) -> DetectorRegistry:
         registry.register(ServicesScanDetector())
         registry.register(HandlesMutexDetector())
 
-    # ThreatIntelDetector is opt-in only (network I/O)
-    # To enable: registry.register(ThreatIntelDetector(enabled=True))
+    if vt_api_key:
+        from forensiq.detectors.threat_intel import ThreatIntelDetector
+
+        registry.register(
+            ThreatIntelDetector(enabled=True, vt_api_key=vt_api_key)
+        )
+
     return registry

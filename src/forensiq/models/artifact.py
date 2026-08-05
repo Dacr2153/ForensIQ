@@ -125,8 +125,18 @@ class DLLEntry(BaseModel):
     )
     load_count: int = Field(
         default=1,
-        description="Reference count. 0xFFFF (65535) is the 'load-order' sentinel value. -1 means unknown (Volatility sentinel).",
+        description=(
+            "Reference count. 0xFFFF (65535) is the 'load-order' sentinel value."
+            " -1 means unknown (Volatility sentinel)."
+        ),
         ge=-1,
+    )
+    content_sha256: str = Field(
+        default="",
+        description="SHA-256 hex digest of the DLL file *content*, when known. "
+        "Empty string means the content hash is unavailable — threat-intel "
+        "lookups are skipped for such entries rather than fabricating a hash "
+        "from the path.",
     )
 
     @field_validator("full_dll_name")

@@ -310,6 +310,23 @@ async def test_default_db_path_uses_settings(monkeypatch: pytest.MonkeyPatch) ->
 
 
 @pytest.mark.asyncio
+async def test_configured_db_path_used(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """FORENSIQ_DB_PATH must flow through settings.DB_PATH to the manager."""
+    from forensiq.db.manager import ForensiqDatabase
+
+    custom = tmp_path / "custom_dir" / "analysis.db"
+
+    class _FakeSettings:
+        DB_PATH = str(custom)
+
+    monkeypatch.setattr("forensiq.db.manager.get_settings", lambda: _FakeSettings())
+    db = ForensiqDatabase()
+    assert db.db_path == custom
+
+
+@pytest.mark.asyncio
 async def test_close_without_connect_is_noop() -> None:
     """close() with _conn=None (no connect called) should be a no-op."""
     from forensiq.db.manager import ForensiqDatabase

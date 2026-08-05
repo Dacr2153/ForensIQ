@@ -10,7 +10,6 @@ import pytest
 from forensiq.integrations.malwarebazaar import MalwareBazaarClient, ThreatIntelResult
 from forensiq.integrations.virustotal import VirusTotalClient, VTResult
 
-
 # ── ThreatIntelResult dataclass ───────────────────────────────────────────────
 
 
@@ -150,7 +149,6 @@ class TestMalwareBazaarClient:
     @pytest.mark.asyncio
     async def test_context_manager_no_httpx(self):
         """Without httpx available, __aenter__ does not raise."""
-        client = MalwareBazaarClient()
         with patch.dict("sys.modules", {"httpx": None}):
             async with MalwareBazaarClient() as c:
                 assert c._client is None
@@ -233,3 +231,22 @@ class TestVirusTotalClient:
 
         result = await client.lookup_hash("a" * 64)
         assert result.verdict == "error"
+
+    @pytest.mark.asyncio
+    async def test_lookup_batch_returns_all_hashes(self):
+        """lookup_batch returns a dict keyed by hash and respects delay_ms=0."""
+        client = VirusTotalClient(api_key="test_key")
+        client._client = AsyncMock()
+        client._client.get = AsyncMock(
+            side_effect=[
+                MagicMock(status_code=404),
+                MagicMock(status_code=404),
+            ]
+        )
+
+        hashes = ["a" * 64, "b" * 64]
+        results = await client.lookup_batch(hashes, delay_ms=0)
+
+        assert set(results.keys()) == set(hashes)
+        assert all(r.verdict == "unknown" for r in results.values())
+        assert client._client.get.call_count == 2

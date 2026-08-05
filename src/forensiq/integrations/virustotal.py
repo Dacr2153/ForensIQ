@@ -18,6 +18,7 @@ MD5 lookups are supported but SHA256 is preferred.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -175,3 +176,28 @@ class VirusTotalClient:
             total=total,
             detection_names=detection_names,
         )
+
+    async def lookup_batch(
+        self,
+        hashes: list[str],
+        delay_ms: int = 15_000,
+    ) -> dict[str, VTResult]:
+        """Look up multiple hashes with rate limiting.
+
+        VirusTotal free tier allows 4 requests/minute, so a 15s delay
+        between requests is applied by default to respect that limit.
+
+        Args:
+            hashes: List of hash strings to look up.
+            delay_ms: Milliseconds between requests (default respects the
+                free-tier 4 req/min rate limit).
+
+        Returns:
+            Dict mapping hash_value → VTResult.
+        """
+        results: dict[str, VTResult] = {}
+        for i, hash_value in enumerate(hashes):
+            results[hash_value] = await self.lookup_hash(hash_value)
+            if i < len(hashes) - 1 and delay_ms > 0:
+                await asyncio.sleep(delay_ms / 1000)
+        return results

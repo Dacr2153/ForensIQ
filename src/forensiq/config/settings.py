@@ -96,14 +96,24 @@ class Settings(BaseSettings):
         description="Enable YARA rule generation via Ollama LLM.",
     )
 
-    # ─── External Integrations (optional) ────────────────────────────────────
+    # ─── Threat Intelligence (optional) ──────────────────────────────────────
+    DLL_ROOT: str = Field(
+        default="",
+        description="Root directory for resolving DLL content files during "
+        "artifact hashing. Windows dump analysis happens on a separate host "
+        "where the original files are unavailable, so set this to the mount "
+        "point or copied tree of the suspect system's files to compute genuine "
+        "SHA-256 content hashes (e.g. /mnt/evidence). Empty = hashing only "
+        "works when the DLL path is a real file on this host (live Linux).",
+    )
     VT_API_KEY: str = Field(
         default="",
         description="VirusTotal API v3 key. Leave empty to disable VT lookups.",
     )
-    FORENSIQ_DB_PATH: str = Field(
+    DB_PATH: str = Field(
         default="",
-        description="SQLite database path for analysis history. Empty = ~/.forensiq/forensiq.db",
+        description="SQLite database path for analysis history. "
+        "Empty = ~/.forensiq/forensiq.db. Env var: FORENSIQ_DB_PATH.",
     )
 
     # ─── Logging ──────────────────────────────────────────────────────────────
@@ -191,6 +201,16 @@ class Settings(BaseSettings):
     def get_yara_rules_dir(self) -> Path:
         """Return the resolved absolute path to the YARA rules output directory."""
         return Path(self.YARA_RULES_DIR).resolve()
+
+    def get_dll_root(self) -> Path | None:
+        """Return the resolved absolute DLL content root, or None if unset.
+
+        Returns:
+            Absolute Path if DLL_ROOT is configured, None otherwise.
+        """
+        if not self.DLL_ROOT:
+            return None
+        return Path(self.DLL_ROOT).resolve()
 
     def get_volatility_executable(self) -> str:
         """Return the absolute path to vol, or the configured path if already absolute.

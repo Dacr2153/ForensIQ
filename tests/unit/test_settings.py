@@ -14,10 +14,10 @@ from forensiq.config.settings import Settings
 
 def _make_settings(**kwargs) -> Settings:
     """Create a Settings instance with sensible defaults and no real dirs."""
-    base = dict(
-        REPORTS_DIR="/tmp/forensiq_test_reports",
-        YARA_RULES_DIR="/tmp/forensiq_test_yara",
-    )
+    base = {
+        "REPORTS_DIR": "/tmp/forensiq_test_reports",
+        "YARA_RULES_DIR": "/tmp/forensiq_test_yara",
+    }
     base.update(kwargs)
     return Settings(**base)
 
@@ -143,3 +143,24 @@ class TestConvenienceMethods:
     def test_threat_threshold_invalid_one(self):
         with pytest.raises(ValidationError):
             _make_settings(THREAT_THRESHOLD=1.0)
+
+
+# ── DB_PATH env mapping ───────────────────────────────────────────────────────
+
+
+class TestDbPath:
+    def test_field_is_db_path_not_prefixed(self):
+        """The field must be named DB_PATH so FORENSIQ_DB_PATH maps to it."""
+        s = _make_settings()
+        assert hasattr(s, "DB_PATH")
+        assert not hasattr(s, "FORENSIQ_DB_PATH")
+
+    def test_db_path_default_empty(self):
+        s = _make_settings()
+        assert s.DB_PATH == ""
+
+    def test_db_path_env_var_binding(self, monkeypatch):
+        """FORENSIQ_DB_PATH env var is bound to settings.DB_PATH via the prefix."""
+        monkeypatch.setenv("FORENSIQ_DB_PATH", "/var/lib/forensiq/custom.db")
+        s = Settings(_env_file=None)
+        assert s.DB_PATH == "/var/lib/forensiq/custom.db"

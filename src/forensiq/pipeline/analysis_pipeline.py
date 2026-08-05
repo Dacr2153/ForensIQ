@@ -847,7 +847,10 @@ class AnalysisPipeline:
         from forensiq.detectors.registry import build_default_registry
 
         try:
-            registry = build_default_registry(is_linux=ctx.is_linux)
+            registry = build_default_registry(
+                is_linux=ctx.is_linux,
+                vt_api_key=self._settings.VT_API_KEY,
+            )
             findings = registry.run_all(extraction, vectors)
             log.info(
                 "Detector plugins complete",

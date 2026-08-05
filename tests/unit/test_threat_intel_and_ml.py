@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -14,35 +13,34 @@ from forensiq.ml.base import BaseClassifier
 from forensiq.ml.explainer import SHAPExplainer
 from forensiq.models.features import ProcessFeatureVector
 
-
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
 def _vec(**kwargs) -> ProcessFeatureVector:
-    defaults = dict(
-        pid=100,
-        ppid=4,
-        name="test.exe",
-        image_file_name=r"\Windows\System32\test.exe",
-        process_name_entropy=2.5,
-        path_entropy=3.0,
-        path_depth=4,
-        is_system_path=True,
-        parent_child_legit=True,
-        dll_count=5,
-        suspicious_dll_count=0,
-        has_network_connection=False,
-        network_connection_count=0,
-        external_connection_count=0,
-        malfind_hits=0,
-        vad_rwx_count=0,
-        thread_count=5,
-        handle_count=100,
-        has_encoded_cmdline=False,
-        threat_score=0.05,
-        is_malicious=False,
-        shap_values={},
-    )
+    defaults = {
+        "pid": 100,
+        "ppid": 4,
+        "name": "test.exe",
+        "image_file_name": r"\Windows\System32\test.exe",
+        "process_name_entropy": 2.5,
+        "path_entropy": 3.0,
+        "path_depth": 4,
+        "is_system_path": True,
+        "parent_child_legit": True,
+        "dll_count": 5,
+        "suspicious_dll_count": 0,
+        "has_network_connection": False,
+        "network_connection_count": 0,
+        "external_connection_count": 0,
+        "malfind_hits": 0,
+        "vad_rwx_count": 0,
+        "thread_count": 5,
+        "handle_count": 100,
+        "has_encoded_cmdline": False,
+        "threat_score": 0.05,
+        "is_malicious": False,
+        "shap_values": {},
+    }
     defaults.update(kwargs)
     return ProcessFeatureVector(**defaults)
 
@@ -72,11 +70,19 @@ class TestThreatIntelDetector:
     def test_enabled_by_default_is_false(self):
         assert ThreatIntelDetector.enabled_by_default is False
 
+    def test_instance_shadows_enabled_by_default_when_enabled(self):
+        det = ThreatIntelDetector(enabled=True)
+        assert det.enabled_by_default is True
+        assert ThreatIntelDetector.enabled_by_default is False
+
     def test_detect_exception_returns_empty(self, sample_extraction):
         """If async detection raises unexpectedly, detect() returns []."""
         det = ThreatIntelDetector(enabled=True)
         # Patch asyncio.run to raise a generic exception
-        with patch("forensiq.detectors.threat_intel.asyncio.run", side_effect=Exception("network error")):
+        with patch(
+            "forensiq.detectors.threat_intel.asyncio.run",
+            side_effect=Exception("network error"),
+        ):
             results = det.detect(sample_extraction, [])
         assert results == []
 
@@ -259,7 +265,6 @@ class TestSHAPExplainerAdditional:
 
     def test_get_explainer_uses_calibrated_classifiers(self):
         """_get_explainer uses calibrated_classifiers_[0].estimator when present (lines 56-62)."""
-        import shap as shap_lib
 
         mock_estimator = MagicMock()
         mock_calibrator = MagicMock()
@@ -275,11 +280,11 @@ class TestSHAPExplainerAdditional:
 
         with patch("forensiq.ml.explainer.shap") as mock_shap:
             mock_shap.TreeExplainer.return_value = MagicMock()
-            result = explainer._get_explainer()
+            explainer._get_explainer()
             mock_shap.TreeExplainer.assert_called_once_with(mock_estimator)
 
     def test_get_explainer_uses_estimator_attribute(self):
-        """_get_explainer uses model.estimator when calibrated_classifiers_ not present (lines 63-64)."""
+        """_get_explainer uses model.estimator when calibrated_classifiers_ is absent."""
         mock_base = MagicMock()
         mock_model = MagicMock()
 
@@ -307,18 +312,25 @@ class TestThreatIntelDetectorAsync:
         extraction.dlls = {4: [safe_dll]}
         return extraction
 
-    def test_detect_runtime_error_fallback(self, sample_extraction):
-        """RuntimeError from asyncio.run triggers fallback event loop path."""
+    def _make_suspicious_dll(self, sha256=None):
+        """A suspicious DLL mock carrying a genuine content hash."""
+        dll_mock = MagicMock()
+        dll_mock.is_suspicious = True
+        dll_mock.full_dll_name = r"\Users\victim\AppData\Local\Temp\evil.dll"
+        dll_mock.content_sha256 = sha256 or ("a" * 64)
+        return dll_mock
+
+    def test_detect_inside_running_loop(self, sample_extraction):
+        """detect() bridges to a worker thread when called inside an event loop."""
         det = ThreatIntelDetector(enabled=True)
-        # Patch asyncio.run to raise RuntimeError (simulates nested event loop)
-        with patch("forensiq.detectors.threat_intel.asyncio.run", side_effect=RuntimeError("nested")):
-            # Patch the event loop fallback to succeed
-            mock_loop = MagicMock()
-            mock_loop.run_until_complete.return_value = []
-            with patch("forensiq.detectors.threat_intel.asyncio.get_event_loop", return_value=mock_loop):
-                results = det.detect(sample_extraction, [])
+
+        async def _probe():
+            return det.detect(sample_extraction, [])
+
+        import asyncio
+
+        results = asyncio.run(_probe())
         assert results == []
-        mock_loop.run_until_complete.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_detect_async_no_suspicious_dlls_returns_empty(self):
@@ -329,17 +341,27 @@ class TestThreatIntelDetectorAsync:
         assert results == []
 
     @pytest.mark.asyncio
+    async def test_detect_async_skips_dll_without_content_hash(self):
+        """Suspicious DLLs without a content hash are skipped (no path-hash fabrication)."""
+        det = ThreatIntelDetector(enabled=True)
+        extraction = MagicMock()
+        extraction.process_tree = None
+        dll_mock = MagicMock()
+        dll_mock.is_suspicious = True
+        dll_mock.full_dll_name = r"\Users\victim\AppData\Local\Temp\evil.dll"
+        dll_mock.content_sha256 = ""
+        extraction.dlls = {1234: [dll_mock]}
+
+        results = await det._detect_async(extraction, [])
+        assert results == []
+
+    @pytest.mark.asyncio
     async def test_detect_async_cached_malicious_dll(self):
         """_detect_async uses cached malicious verdict from DB."""
         det = ThreatIntelDetector(enabled=True)
         extraction = MagicMock()
         extraction.process_tree = None
-
-        # Mock a suspicious DLL using MagicMock (not DLLEntry, to avoid full_path issue)
-        dll_mock = MagicMock()
-        dll_mock.is_suspicious = True
-        dll_mock.full_path = "/tmp/evil.dll"
-        extraction.dlls = {1234: [dll_mock]}
+        extraction.dlls = {1234: [self._make_suspicious_dll()]}
 
         cached_result = {"verdict": "malicious", "malware_name": "Emotet", "source": "cache"}
 
@@ -355,6 +377,108 @@ class TestThreatIntelDetectorAsync:
             results = await det._detect_async(extraction, [])
         assert len(results) >= 1
         assert results[0].pid == 1234
+
+    @pytest.mark.asyncio
+    async def test_detect_async_virustotal_first(self):
+        """When VT resolves a hash as malicious, VT is the source (no MB query)."""
+        det = ThreatIntelDetector(enabled=True, vt_api_key="test_key", vt_delay_ms=0)
+        extraction = MagicMock()
+        extraction.process_tree = None
+        extraction.dlls = {1234: [self._make_suspicious_dll()]}
+
+        from unittest.mock import AsyncMock
+
+        from forensiq.integrations.virustotal import VTResult
+
+        vt_result = VTResult(
+            hash_value="a" * 64,
+            hash_type="sha256",
+            source="virustotal",
+            is_malicious=True,
+            verdict="malicious",
+            malware_name="Trojan.Emotet",
+            positives=25,
+            total=70,
+        )
+
+        mock_db = MagicMock()
+        mock_db.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_db.__aexit__ = AsyncMock(return_value=None)
+        mock_db.get_threat_intel = AsyncMock(return_value=None)
+        mock_db.save_threat_intel = AsyncMock()
+
+        mock_vt_client = MagicMock()
+        mock_vt_client.is_configured.return_value = True
+        mock_vt_client.__aenter__ = AsyncMock(return_value=mock_vt_client)
+        mock_vt_client.__aexit__ = AsyncMock(return_value=None)
+        mock_vt_client.lookup_batch = AsyncMock(return_value={"a" * 64: vt_result})
+
+        mock_mb = MagicMock()
+        mock_mb.__aenter__ = AsyncMock(return_value=mock_mb)
+        mock_mb.__aexit__ = AsyncMock(return_value=None)
+        mock_mb.lookup_batch = AsyncMock(return_value={})
+
+        with patch("forensiq.db.manager.ForensiqDatabase", return_value=mock_db), \
+             patch(
+                 "forensiq.integrations.virustotal.VirusTotalClient",
+                 return_value=mock_vt_client,
+             ), \
+             patch("forensiq.integrations.malwarebazaar.MalwareBazaarClient", return_value=mock_mb):
+            results = await det._detect_async(extraction, [])
+
+        assert len(results) == 1
+        assert results[0].evidence["source"] == "virustotal"
+        assert results[0].evidence["sha256"] == "a" * 64
+        mock_mb.lookup_batch.assert_not_called()
+        mock_db.save_threat_intel.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_detect_async_malwarebazaar_fallback(self):
+        """When VT is unconfigured, MalwareBazaar is used as the source."""
+        det = ThreatIntelDetector(enabled=True, vt_delay_ms=0, mb_delay_ms=0)
+        extraction = MagicMock()
+        extraction.process_tree = None
+        extraction.dlls = {1234: [self._make_suspicious_dll()]}
+
+        from unittest.mock import AsyncMock
+
+        from forensiq.integrations.malwarebazaar import ThreatIntelResult
+
+        mb_result = ThreatIntelResult(
+            hash_value="a" * 64,
+            hash_type="sha256",
+            source="malwarebazaar",
+            is_malicious=True,
+            verdict="malicious",
+            malware_name="RedLine",
+        )
+
+        mock_db = MagicMock()
+        mock_db.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_db.__aexit__ = AsyncMock(return_value=None)
+        mock_db.get_threat_intel = AsyncMock(return_value=None)
+        mock_db.save_threat_intel = AsyncMock()
+
+        mock_vt_client = MagicMock()
+        mock_vt_client.is_configured.return_value = False
+        mock_vt_client.__aenter__ = AsyncMock(return_value=mock_vt_client)
+        mock_vt_client.__aexit__ = AsyncMock(return_value=None)
+
+        mock_mb = MagicMock()
+        mock_mb.__aenter__ = AsyncMock(return_value=mock_mb)
+        mock_mb.__aexit__ = AsyncMock(return_value=None)
+        mock_mb.lookup_batch = AsyncMock(return_value={"a" * 64: mb_result})
+
+        with patch("forensiq.db.manager.ForensiqDatabase", return_value=mock_db), \
+             patch(
+                 "forensiq.integrations.virustotal.VirusTotalClient",
+                 return_value=mock_vt_client,
+             ), \
+             patch("forensiq.integrations.malwarebazaar.MalwareBazaarClient", return_value=mock_mb):
+            results = await det._detect_async(extraction, [])
+
+        assert len(results) == 1
+        assert results[0].evidence["source"] == "malwarebazaar"
 
     @pytest.mark.asyncio
     async def test_detect_async_no_suspicious_dlls_with_process_tree(self):

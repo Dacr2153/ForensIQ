@@ -121,8 +121,33 @@ class DLLExtractor:
             )
         return result
 
-    def __init__(self, runner: VolatilityRunner) -> None:
+    def __init__(self, runner: VolatilityRunner, dll_root: Path | None = None) -> None:
         self._runner = runner
+        # Content hashing is wired into extraction so all pipeline paths
+        # (sequential / parallel / async) populate genuine content_sha256 for
+        # suspicious DLLs — enabling real threat-intel lookups.
+        self._dll_root = dll_root
+
+    def _hash_content(
+        self,
+        dlls_by_pid: dict[int, list[DLLEntry]],
+    ) -> dict[int, list[DLLEntry]]:
+        """Populate genuine content_sha256 for suspicious DLLs.
+
+        Resolves DLL paths to real files (under FORENSIQ_DLL_ROOT when set,
+        otherwise as absolute host paths — the live Linux case) and computes
+        SHA-256 of the file content. Never fabricates a hash.
+
+        Args:
+            dlls_by_pid: DLL entries grouped by PID.
+
+        Returns:
+            Updated dict with content_sha256 populated where resolvable.
+        """
+        from forensiq.extraction.dll_hasher import DLLContentHasher
+
+        hasher = DLLContentHasher(dll_root=self._dll_root)
+        return hasher.hash_dlls(dlls_by_pid)
 
     def _row_to_dll_entry(self, row: dict[str, Any]) -> DLLEntry | None:
         """Convert a single dlllist row to a DLLEntry.
@@ -189,7 +214,7 @@ class DLLExtractor:
             pids_with_dlls=len(dlls_by_pid),
             skipped=skipped,
         )
-        return dlls_by_pid
+        return self._hash_content(dlls_by_pid)
 
     async def extract_async(self) -> dict[int, list[DLLEntry]]:
         """Async variant: run windows.dlllist via asyncio subprocess."""
@@ -230,4 +255,4 @@ class DLLExtractor:
             if all_pids:
                 dlls_by_pid = self._dlls_from_proc_maps(all_pids)
 
-        return dlls_by_pid
+        return self._hash_content(dlls_by_pid)
