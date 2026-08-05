@@ -10,7 +10,6 @@ import pytest
 
 from forensiq.cache.plugin_cache import PluginCache, _sanitize_plugin_name
 
-
 # ---------------------------------------------------------------------------
 # _sanitize_plugin_name
 # ---------------------------------------------------------------------------

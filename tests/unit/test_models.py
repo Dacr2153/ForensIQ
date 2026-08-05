@@ -222,6 +222,35 @@ class TestMalfindRegion:
         )
         assert region.has_shellcode_indicators is True
 
+    def test_has_pe_header_false_when_empty_hexdump(self) -> None:
+        region = MalfindRegion(
+            pid=100,
+            start=0x1000,
+            end=0x2000,
+            protection="PAGE_EXECUTE_READWRITE",
+            hexdump="",
+        )
+        assert region.has_pe_header is False
+
+    def test_size_bytes_when_end_equal_start(self) -> None:
+        region = MalfindRegion(
+            pid=100,
+            start=0x1000,
+            end=0x1000,
+            protection="PAGE_EXECUTE_READWRITE",
+        )
+        assert region.size_bytes == 0
+
+    def test_has_shellcode_indicators_false_when_empty_disassembly(self) -> None:
+        region = MalfindRegion(
+            pid=100,
+            start=0x1000,
+            end=0x2000,
+            protection="PAGE_EXECUTE_READWRITE",
+            disassembly="",
+        )
+        assert region.has_shellcode_indicators is False
+
 
 class TestProcessTree:
     """Tests for ProcessTree traversal methods."""
@@ -368,34 +397,20 @@ class TestVADEntrySizeBytes:
         assert vad.size_bytes == 0
 
 
-class TestMalfindRegion:
-    def test_has_pe_header_false_when_empty_hexdump(self) -> None:
-        region = MalfindRegion(pid=100, start=0x1000, end=0x2000, protection="PAGE_EXECUTE_READWRITE", hexdump="")
-        assert region.has_pe_header is False
-
-    def test_size_bytes_when_end_equal_start(self) -> None:
-        region = MalfindRegion(pid=100, start=0x1000, end=0x1000, protection="PAGE_EXECUTE_READWRITE")
-        assert region.size_bytes == 0
-
-    def test_has_shellcode_indicators_false_when_empty_disassembly(self) -> None:
-        region = MalfindRegion(pid=100, start=0x1000, end=0x2000, protection="PAGE_EXECUTE_READWRITE", disassembly="")
-        assert region.has_shellcode_indicators is False
-
-
 # ── Network model uncovered branches ──────────────────────────────────────────
 
 
 class TestNetworkConnectionUncovered:
     def _make_conn(self, **kwargs) -> NetworkConnection:
-        defaults = dict(
-            pid=100,
-            proto="TCPv4",
-            local_addr="192.168.1.1",
-            local_port=12345,
-            remote_addr="8.8.8.8",
-            remote_port=80,
-            state=ConnectionState.ESTABLISHED,
-        )
+        defaults = {
+            "pid": 100,
+            "proto": "TCPv4",
+            "local_addr": "192.168.1.1",
+            "local_port": 12345,
+            "remote_addr": "8.8.8.8",
+            "remote_port": 80,
+            "state": ConnectionState.ESTABLISHED,
+        }
         defaults.update(kwargs)
         return NetworkConnection(**defaults)
 
@@ -459,7 +474,7 @@ class TestProcessArtifactUncovered:
         assert result is NotImplemented
 
     def test_get_parent_returns_none_when_pid_not_in_flat_map(self):
-        from forensiq.models.process import ProcessArtifact, ProcessTree
+        from forensiq.models.process import ProcessTree
         tree = ProcessTree(roots=[], flat_map={})
         result = tree.get_parent(9999)
         assert result is None

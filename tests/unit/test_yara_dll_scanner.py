@@ -9,7 +9,6 @@ import pytest
 
 from forensiq.yara.dll_scanner import YARADLLHit, YARADLLScanner
 
-
 # ── _decode_hexdump (static) ──────────────────────────────────────────────────
 
 

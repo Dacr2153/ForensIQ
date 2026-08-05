@@ -143,8 +143,9 @@ def _menu_analyze() -> None:
     console.print(
         Panel(
             "[bold]Analyze Memory Dump[/bold]\n"
-            "[dim]Runs the full 7-stage pipeline: extraction → ML classification → SHAP explanation\n"
-            "→ YARA scanning → detector plugins → MITRE ATT&CK mapping → HTML/JSON/STIX report.[/dim]",
+            "[dim]Runs the full 7-stage pipeline: extraction → ML classification → SHAP\n"
+            "explanation → YARA scanning → detector plugins → MITRE ATT&CK mapping\n"
+            "→ HTML/JSON/STIX report.[/dim]",
             border_style="cyan",
             padding=(0, 1),
         )
@@ -177,7 +178,8 @@ def _menu_analyze() -> None:
     console.print("[bold]Step 3 of 5 — Threat score threshold[/bold]")
     console.print(
         "[dim]Processes with an XGBoost score above this value are classified as malicious.\n"
-        "Recommended: 0.65 (default). Lower = more detections, higher = fewer false positives.[/dim]"
+        "Recommended: 0.65 (default). Lower = more detections, higher = fewer false\n"
+        "positives.[/dim]"
     )
     threshold_raw = _ask_text("Threshold (0.01-0.99, Enter to use default):", default="")
     threshold: float | None = None
@@ -194,7 +196,8 @@ def _menu_analyze() -> None:
     console.print()
     console.print("[bold]Step 4 of 5 — YARA rule generation[/bold]")
     console.print(
-        "[dim]Ollama (local LLM) generates YARA detection rules for malicious processes.\nSkip if Ollama is not running.[/dim]"
+        "[dim]Ollama (local LLM) generates YARA detection rules for malicious\n"
+        "processes. Skip if Ollama is not running.[/dim]"
     )
     no_yara = not _ask_confirm("Generate YARA rules via Ollama?", default=True)
 
@@ -266,8 +269,8 @@ def _menu_live() -> None:
     console.print(
         Panel(
             "[bold]Live Memory Analysis[/bold]\n"
-            "[dim]Checks system prerequisites then acquires and analyzes the running Linux kernel memory.\n"
-            "Two acquisition methods are supported:\n"
+            "[dim]Checks system prerequisites then acquires and analyzes the running\n"
+            "Linux kernel memory. Two acquisition methods are supported:\n"
             "  /proc/kcore  \u2014 standard kernels (fastest, no module needed)\n"
             "  LiME         \u2014 linux-hardened kernels where /proc/kcore is disabled[/dim]",
             border_style="cyan",
@@ -343,7 +346,8 @@ def _menu_live() -> None:
 
     if reqs.get("kernel_hardened") and not reqs["kcore_exists"]:
         console.print(
-            "[yellow]Note:[/yellow] This linux-hardened kernel has /proc/kcore disabled (security policy).\n"
+            "[yellow]Note:[/yellow] This linux-hardened kernel has /proc/kcore disabled\n"
+            "(security policy).\n"
             "[dim]ForensIQ will use LiME (Linux Memory Extractor) instead.[/dim]\n"
         )
 
@@ -410,7 +414,8 @@ def _menu_live() -> None:
     if not reqs.get("linux_isf_available"):
         if reqs.get("linux_isf_can_build"):
             console.print(
-                "[yellow]Kernel ISF not built yet[/yellow] — Volatility 3 needs it to analyze the LiME dump.\n"
+                "[yellow]Kernel ISF not built yet[/yellow] — Volatility 3 needs it to\n"
+                "analyze the LiME dump.\n"
                 "[dim]Uses BTF (/sys/kernel/btf/vmlinux) + System.map. Takes ~60s.[/dim]\n"
             )
             if _ask_confirm("Build kernel ISF (symbol table) now?", default=True):
@@ -423,16 +428,18 @@ def _menu_live() -> None:
                     console.print(f"\n[green]ISF built:[/green] {isf_path}\n")
                     reqs["linux_isf_available"] = True
                     reqs["linux_isf_path"] = str(isf_path)
-                except (RuntimeError, Exception) as exc:
+                except Exception as exc:
                     err_console.print(f"[red]ISF build failed:[/red] {exc}")
                     console.print(
-                        "[yellow]Analysis will proceed but Volatility 3 plugins may fail.[/yellow]\n"
+                        "[yellow]Analysis will proceed but Volatility 3 plugins may\n"
+                        "fail.[/yellow]\n"
                         "[dim]Run manually: sudo forensiq live --build-isf[/dim]"
                     )
         else:
             console.print(
                 "[yellow]Kernel ISF not available.[/yellow] Volatility 3 Linux analysis may fail.\n"
-                "[dim]Build requires: BTF (/sys/kernel/btf/vmlinux) + System.map + Go + dwarf2json[/dim]"
+                "[dim]Build requires: BTF (/sys/kernel/btf/vmlinux) + System.map + Go +\n"
+                "dwarf2json[/dim]"
             )
 
     if not reqs["has_root"]:
@@ -447,7 +454,8 @@ def _menu_live() -> None:
             "[bold yellow]Security notice[/bold yellow]\n\n"
             "LiME will read ALL physical memory from the running kernel and write it to disk.\n"
             "The resulting file contains sensitive data: credentials, encryption keys, process\n"
-            "memory, and kernel internals. Treat the dump file as a high-confidentiality artifact.\n\n"
+            "memory, and kernel internals. Treat the dump file as a high-confidentiality\n"
+            "artifact.\n\n"
             "[dim]Ensure the output directory is not world-readable and is stored securely.[/dim]",
             border_style="yellow",
             padding=(0, 1),
@@ -581,17 +589,17 @@ def _run_pipeline_with_progress(
     _root_logger.setLevel(logging.WARNING)
 
     # ── Stage registry ────────────────────────────────────────────────────────
-    _STAGES = [
+    stages = [
         ("extraction", "Extracting artifacts via Volatility 3"),
         ("classification", "Classifying processes with ML model"),
         ("detectors", "Running detector plugins (MITRE mapping)"),
         ("yara", "Generating YARA detection rules via Ollama"),
         ("report", "Building HTML / JSON / STIX reports"),
     ]
-    stage_status: dict[str, str] = {k: "pending" for k, _ in _STAGES}
+    stage_status: dict[str, str] = {k: "pending" for k, _ in stages}
     stage_detail: dict[str, str] = {}
 
-    _STATUS_LABEL = {
+    status_label = {
         "pending": "[dim]waiting[/dim]",
         "running": "[cyan]running[/cyan]",
         "done": "[green]done   [/green]",
@@ -610,10 +618,10 @@ def _run_pipeline_with_progress(
         t.add_column("Stage", width=46, no_wrap=True)
         t.add_column("Status", width=10, no_wrap=True)
         t.add_column("Detail", style="dim", width=52, no_wrap=True)
-        for i, (key, label) in enumerate(_STAGES, 1):
+        for i, (key, label) in enumerate(stages, 1):
             st = stage_status[key]
             label_str = f"[bold]{label}[/bold]" if st == "running" else label
-            t.add_row(str(i), label_str, _STATUS_LABEL.get(st, ""), stage_detail.get(key, ""))
+            t.add_row(str(i), label_str, status_label.get(st, ""), stage_detail.get(key, ""))
         return t
 
     def _on_stage(stage: str, data: object) -> None:
@@ -790,12 +798,14 @@ def _menu_diff() -> None:
 
     if diff_result.new_processes:
         console.print(
-            f"\n[green]New PIDs:[/green] {', '.join(str(p) for p in diff_result.new_processes[:10])}"
+            "\n[green]New PIDs:[/green] "
+            f"{', '.join(str(p) for p in diff_result.new_processes[:10])}"
             + (" …" if len(diff_result.new_processes) > 10 else "")
         )
     if diff_result.disappeared_processes:
         console.print(
-            f"[red]Gone PIDs:[/red] {', '.join(str(p) for p in diff_result.disappeared_processes[:10])}"
+            "[red]Gone PIDs:[/red] "
+            f"{', '.join(str(p) for p in diff_result.disappeared_processes[:10])}"
             + (" …" if len(diff_result.disappeared_processes) > 10 else "")
         )
 
@@ -805,8 +815,10 @@ def _menu_history() -> None:
     console.print(
         Panel(
             "[bold]Analysis History[/bold]\n"
-            "[dim]Lists the 20 most recent analyses stored in the local ForensIQ database (~/.forensiq/forensiq.db).\n"
-            "Each row shows when the dump was analyzed, its threat level, and a SHA-256 fingerprint.[/dim]",
+            "[dim]Lists the 20 most recent analyses stored in the local ForensIQ\n"
+            "database (~/.forensiq/forensiq.db).\n"
+            "Each row shows when the dump was analyzed, its threat level, and a\n"
+            "SHA-256 fingerprint.[/dim]",
             border_style="cyan",
             padding=(0, 1),
         )
@@ -866,8 +878,10 @@ def _menu_check() -> None:
     console.print(
         Panel(
             "[bold]System Requirements Check[/bold]\n"
-            "[dim]Verifies that all tools and libraries ForensIQ depends on are installed and reachable.\n"
-            "Missing optional components reduce functionality but do not prevent basic analysis.[/dim]",
+            "[dim]Verifies that all tools and libraries ForensIQ depends on are\n"
+            "installed and reachable.\n"
+            "Missing optional components reduce functionality but do not prevent\n"
+            "basic analysis.[/dim]",
             border_style="cyan",
             padding=(0, 1),
         )
@@ -958,7 +972,8 @@ def _print_report_summary(report) -> None:  # type: ignore[no-untyped-def]
     threat_color = _C.get(report.threat_level, "white")
     console.print(
         Panel(
-            f"[bold]Threat Level:[/bold] [{threat_color}]{report.threat_level.upper()}[/{threat_color}]\n"
+            f"[bold]Threat Level:[/bold] [{threat_color}]{report.threat_level.upper()}"
+            f"[/{threat_color}]\n"
             f"Total processes: {report.total_processes}  |  "
             f"[red]Malicious: {report.malicious_count}[/red]  |  "
             f"[yellow]Suspicious: {report.suspicious_count}[/yellow]",
@@ -991,7 +1006,8 @@ def run_menu() -> None:
     """Launch the interactive TUI main menu loop."""
     _print_banner()
     console.print(
-        "[dim]  Use the arrow keys to navigate, Enter to select, Ctrl+C to return to this menu.[/dim]"
+        "[dim]  Use the arrow keys to navigate, Enter to select, Ctrl+C to return\n"
+        "to this menu.[/dim]"
     )
     _separator()
 

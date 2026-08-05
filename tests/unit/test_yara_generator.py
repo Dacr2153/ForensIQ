@@ -5,14 +5,13 @@ from __future__ import annotations
 
 import pytest
 
+from forensiq.utils.exceptions import YARAGenerationError
 from forensiq.yara.generator import (
     _fix_common_yara_errors,
     _parse_yara_block,
     _sanitize_rule_name,
     _validate_yara_rule,
 )
-from forensiq.utils.exceptions import YARAGenerationError
-
 
 # ── _sanitize_rule_name ───────────────────────────────────────────────────────
 
@@ -142,7 +141,14 @@ class TestFixCommonYaraErrors:
         assert "rule forensiq_evil_1 {" in result
 
     def test_no_change_when_already_correct(self):
-        text = "rule forensiq_test_1 {\n    strings:\n        $s = \"ok\"\n    condition:\n        $s\n}"
+        text = (
+            "rule forensiq_test_1 {\n"
+            "    strings:\n"
+            '        $s = "ok"\n'
+            "    condition:\n"
+            "        $s\n"
+            "}"
+        )
         result = _fix_common_yara_errors(text)
         # Should not break anything already correct
         assert "rule forensiq_test_1 {" in result
@@ -185,5 +191,5 @@ class TestValidateYaraRule:
         assert "Empty" in err
 
     def test_whitespace_rule_returns_false(self):
-        is_valid, err = _validate_yara_rule("   \n  ", "blank")
+        is_valid, _err = _validate_yara_rule("   \n  ", "blank")
         assert is_valid is False

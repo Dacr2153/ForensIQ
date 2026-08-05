@@ -131,9 +131,11 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "S105", "S106"]
+"tests/**" = ["S101", "S104", "S105", "S106", "S108"]
 # typer.Option() in function default arguments is the standard typer CLI pattern
 "src/forensiq/cli.py" = ["B008"]
+# X_train / X_test / y_train are the conventional sklearn/XGBoost matrix names
+"src/forensiq/ml/training/train.py" = ["N803", "N806"]
 
 # ─── MyPy (Type Checking) ─────────────────────────────────────────────────────
 [tool.mypy]

@@ -22,73 +22,111 @@ MITRE_TECHNIQUES: dict[str, dict[str, str]] = {
     "T1014": {
         "name": "Rootkit",
         "tactic": "Defense Evasion",
-        "description": "Adversaries may use rootkits to hide the presence of programs, files, network connections, services, drivers, and other system components.",
+        "description": (
+            "Adversaries may use rootkits to hide the presence of programs, files,"
+            " network connections, services, drivers, and other system components."
+        ),
         "url": "https://attack.mitre.org/techniques/T1014/",
     },
     "T1027": {
         "name": "Obfuscated Files or Information",
         "tactic": "Defense Evasion",
-        "description": "Adversaries may attempt to make an executable or file difficult to discover or analyze by encrypting, encoding, or otherwise obfuscating its contents.",
+        "description": (
+            "Adversaries may attempt to make an executable or file difficult to"
+            " discover or analyze by encrypting, encoding, or otherwise obfuscating"
+            " its contents."
+        ),
         "url": "https://attack.mitre.org/techniques/T1027/",
     },
     "T1027.001": {
         "name": "Binary Padding",
         "tactic": "Defense Evasion",
-        "description": "Adversaries may use binary padding to add junk data and change the on-disk representation of malware.",
+        "description": (
+            "Adversaries may use binary padding to add junk data and change the"
+            " on-disk representation of malware."
+        ),
         "url": "https://attack.mitre.org/techniques/T1027/001/",
     },
     "T1003": {
         "name": "OS Credential Dumping",
         "tactic": "Credential Access",
-        "description": "Adversaries may attempt to dump credentials to obtain account login and credential material.",
+        "description": (
+            "Adversaries may attempt to dump credentials to obtain account login"
+            " and credential material."
+        ),
         "url": "https://attack.mitre.org/techniques/T1003/",
     },
     "T1003.001": {
         "name": "LSASS Memory",
         "tactic": "Credential Access",
-        "description": "Adversaries may attempt to access credential material stored in the process memory of the Local Security Authority Subsystem Service (LSASS).",
+        "description": (
+            "Adversaries may attempt to access credential material stored in the"
+            " process memory of the Local Security Authority Subsystem Service"
+            " (LSASS)."
+        ),
         "url": "https://attack.mitre.org/techniques/T1003/001/",
     },
     "T1036": {
         "name": "Masquerading",
         "tactic": "Defense Evasion",
-        "description": "Adversaries may attempt to manipulate features of their artifacts to make them appear legitimate or benign to users and/or security tools.",
+        "description": (
+            "Adversaries may attempt to manipulate features of their artifacts to"
+            " make them appear legitimate or benign to users and/or security tools."
+        ),
         "url": "https://attack.mitre.org/techniques/T1036/",
     },
     "T1036.004": {
         "name": "Masquerade Task or Service",
         "tactic": "Defense Evasion",
-        "description": "Adversaries may attempt to manipulate the name of a task or service to make it appear legitimate or benign.",
+        "description": (
+            "Adversaries may attempt to manipulate the name of a task or service to"
+            " make it appear legitimate or benign."
+        ),
         "url": "https://attack.mitre.org/techniques/T1036/004/",
     },
     "T1036.005": {
         "name": "Match Legitimate Name or Location",
         "tactic": "Defense Evasion",
-        "description": "Adversaries may match or approximate the name or location of legitimate files or resources when naming/placing them.",
+        "description": (
+            "Adversaries may match or approximate the name or location of"
+            " legitimate files or resources when naming/placing them."
+        ),
         "url": "https://attack.mitre.org/techniques/T1036/005/",
     },
     "T1043": {
         "name": "Commonly Used Port",
         "tactic": "Command and Control",
-        "description": "Adversaries may communicate over a commonly used port to bypass firewalls or network detection systems.",
+        "description": (
+            "Adversaries may communicate over a commonly used port to bypass"
+            " firewalls or network detection systems."
+        ),
         "url": "https://attack.mitre.org/techniques/T1043/",
     },
     "T1055": {
         "name": "Process Injection",
         "tactic": "Defense Evasion, Privilege Escalation",
-        "description": "Adversaries may inject code into processes in order to evade process-based defenses as well as possibly elevate privileges.",
+        "description": (
+            "Adversaries may inject code into processes in order to evade"
+            " process-based defenses as well as possibly elevate privileges."
+        ),
         "url": "https://attack.mitre.org/techniques/T1055/",
     },
     "T1055.012": {
         "name": "Process Hollowing",
         "tactic": "Defense Evasion, Privilege Escalation",
-        "description": "Adversaries may inject malicious code into suspended and hollowed processes in order to evade process-based defenses.",
+        "description": (
+            "Adversaries may inject malicious code into suspended and hollowed"
+            " processes in order to evade process-based defenses."
+        ),
         "url": "https://attack.mitre.org/techniques/T1055/012/",
     },
     "T1059": {
         "name": "Command and Scripting Interpreter",
         "tactic": "Execution",
-        "description": "Adversaries may abuse command and script interpreters to execute commands, scripts, or binaries.",
+        "description": (
+            "Adversaries may abuse command and script interpreters to execute"
+            " commands, scripts, or binaries."
+        ),
         "url": "https://attack.mitre.org/techniques/T1059/",
     },
     "T1059.001": {
@@ -100,67 +138,100 @@ MITRE_TECHNIQUES: dict[str, dict[str, str]] = {
     "T1071": {
         "name": "Application Layer Protocol",
         "tactic": "Command and Control",
-        "description": "Adversaries may communicate using application layer protocols to avoid detection/network filtering by blending in with existing traffic.",
+        "description": (
+            "Adversaries may communicate using application layer protocols to avoid"
+            " detection/network filtering by blending in with existing traffic."
+        ),
         "url": "https://attack.mitre.org/techniques/T1071/",
     },
     "T1071.001": {
         "name": "Web Protocols",
         "tactic": "Command and Control",
-        "description": "Adversaries may communicate using application layer protocols associated with web traffic to avoid detection.",
+        "description": (
+            "Adversaries may communicate using application layer protocols"
+            " associated with web traffic to avoid detection."
+        ),
         "url": "https://attack.mitre.org/techniques/T1071/001/",
     },
     "T1140": {
         "name": "Deobfuscate/Decode Files or Information",
         "tactic": "Defense Evasion",
-        "description": "Adversaries may use obfuscated files or information to hide artifacts of an intrusion from analysis.",
+        "description": (
+            "Adversaries may use obfuscated files or information to hide artifacts"
+            " of an intrusion from analysis."
+        ),
         "url": "https://attack.mitre.org/techniques/T1140/",
     },
     "T1204": {
         "name": "User Execution",
         "tactic": "Execution",
-        "description": "An adversary may rely upon specific actions by a user in order to gain execution.",
+        "description": (
+            "An adversary may rely upon specific actions by a user in order to gain"
+            " execution."
+        ),
         "url": "https://attack.mitre.org/techniques/T1204/",
     },
     "T1204.002": {
         "name": "Malicious File",
         "tactic": "Execution",
-        "description": "An adversary may rely upon a user opening a malicious file in order to gain execution.",
+        "description": (
+            "An adversary may rely upon a user opening a malicious file in order to"
+            " gain execution."
+        ),
         "url": "https://attack.mitre.org/techniques/T1204/002/",
     },
     "T1543": {
         "name": "Create or Modify System Process",
         "tactic": "Persistence, Privilege Escalation",
-        "description": "Adversaries may create or modify system-level processes to repeatedly execute malicious payloads as part of persistence.",
+        "description": (
+            "Adversaries may create or modify system-level processes to repeatedly"
+            " execute malicious payloads as part of persistence."
+        ),
         "url": "https://attack.mitre.org/techniques/T1543/",
     },
     "T1543.003": {
         "name": "Windows Service",
         "tactic": "Persistence, Privilege Escalation",
-        "description": "Adversaries may create or modify Windows services to repeatedly execute malicious payloads as part of persistence.",
+        "description": (
+            "Adversaries may create or modify Windows services to repeatedly"
+            " execute malicious payloads as part of persistence."
+        ),
         "url": "https://attack.mitre.org/techniques/T1543/003/",
     },
     "T1547": {
         "name": "Boot or Logon Autostart Execution",
         "tactic": "Persistence, Privilege Escalation",
-        "description": "Adversaries may configure system settings to automatically execute a program during system boot or logon to maintain persistence.",
+        "description": (
+            "Adversaries may configure system settings to automatically execute a"
+            " program during system boot or logon to maintain persistence."
+        ),
         "url": "https://attack.mitre.org/techniques/T1547/",
     },
     "T1547.001": {
         "name": "Registry Run Keys / Startup Folder",
         "tactic": "Persistence, Privilege Escalation",
-        "description": "Adversaries may achieve persistence by adding a program to a startup folder or referencing it with a Registry run key.",
+        "description": (
+            "Adversaries may achieve persistence by adding a program to a startup"
+            " folder or referencing it with a Registry run key."
+        ),
         "url": "https://attack.mitre.org/techniques/T1547/001/",
     },
     "T1574": {
         "name": "Hijack Execution Flow",
         "tactic": "Persistence, Privilege Escalation, Defense Evasion",
-        "description": "Adversaries may execute their own malicious payloads by hijacking the way operating systems run programs.",
+        "description": (
+            "Adversaries may execute their own malicious payloads by hijacking the"
+            " way operating systems run programs."
+        ),
         "url": "https://attack.mitre.org/techniques/T1574/",
     },
     "T1574.001": {
         "name": "DLL Search Order Hijacking",
         "tactic": "Persistence, Privilege Escalation, Defense Evasion",
-        "description": "Adversaries may execute their own malicious payloads by hijacking the search order used to load DLLs.",
+        "description": (
+            "Adversaries may execute their own malicious payloads by hijacking the"
+            " search order used to load DLLs."
+        ),
         "url": "https://attack.mitre.org/techniques/T1574/001/",
     },
 }

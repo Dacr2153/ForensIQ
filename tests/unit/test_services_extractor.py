@@ -5,28 +5,25 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import pytest
-
 from forensiq.extraction.services_extractor import (
     ServiceEntry,
     ServicesExtractor,
 )
-
 
 # ── ServiceEntry properties ───────────────────────────────────────────────────
 
 
 class TestServiceEntryProperties:
     def _make(self, **kwargs) -> ServiceEntry:
-        defaults = dict(
-            order=1,
-            pid=0,
-            service_name="MySvc",
-            display_name="My Service",
-            service_type="Win32OwnProcess",
-            service_state="STOPPED",
-            binary_path="C:\\Windows\\System32\\svchost.exe",
-        )
+        defaults = {
+            "order": 1,
+            "pid": 0,
+            "service_name": "MySvc",
+            "display_name": "My Service",
+            "service_type": "Win32OwnProcess",
+            "service_state": "STOPPED",
+            "binary_path": "C:\\Windows\\System32\\svchost.exe",
+        }
         defaults.update(kwargs)
         return ServiceEntry(**defaults)
 
@@ -191,7 +188,11 @@ class TestExtract:
 
     def test_all_services_returned(self):
         rows = [
-            {"ServiceName": "Svc1", "State": "RUNNING", "BinaryPath": "C:\\Windows\\System32\\svc1.exe"},
+            {
+                "ServiceName": "Svc1",
+                "State": "RUNNING",
+                "BinaryPath": "C:\\Windows\\System32\\svc1.exe",
+            },
             {"ServiceName": "Svc2", "State": "STOPPED", "BinaryPath": "C:\\Temp\\evil.exe"},
         ]
         extractor = self._make_extractor(rows)

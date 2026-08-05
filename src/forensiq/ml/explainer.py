@@ -123,7 +123,8 @@ class SHAPExplainer:
 
             for vector, shap_row in zip(vectors, shap_matrix, strict=True):
                 shap_dict = {
-                    name: round(float(val), 6) for name, val in zip(feature_names, shap_row, strict=False)
+                    name: round(float(val), 6)
+                    for name, val in zip(feature_names, shap_row, strict=False)
                 }
                 annotated.append(vector.model_copy(update={"shap_values": shap_dict}))
 

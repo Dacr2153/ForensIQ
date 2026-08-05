@@ -3,13 +3,11 @@
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 import pytest
 
 from forensiq.pipeline.diff_pipeline import DiffPipeline, DiffResult, ProcessDiff
-
 
 # ── ProcessDiff dataclass ─────────────────────────────────────────────────────
 
@@ -45,12 +43,12 @@ class TestProcessDiff:
 
 class TestDiffResult:
     def _make(self, **kwargs) -> DiffResult:
-        defaults = dict(
-            before_path=Path("a.raw"),
-            after_path=Path("b.raw"),
-            before_sha256="aaa",
-            after_sha256="bbb",
-        )
+        defaults = {
+            "before_path": Path("a.raw"),
+            "after_path": Path("b.raw"),
+            "before_sha256": "aaa",
+            "after_sha256": "bbb",
+        }
         defaults.update(kwargs)
         return DiffResult(**defaults)
 

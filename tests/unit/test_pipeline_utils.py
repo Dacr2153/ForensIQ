@@ -3,56 +3,45 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 
 from forensiq.models.features import ProcessFeatureVector
 from forensiq.pipeline.dump_context import DumpContext
 from forensiq.pipeline.timeline import (
-    C2ConnectionRule,
-    EncodedCmdlineRule,
-    LsasDumpingRule,
-    MalfindHitsRule,
-    MasqueradingRule,
-    SuspiciousDLLRule,
-    VADRWXRule,
-    TimelineRule,
     build_timeline,
 )
-
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
 def _vec(**kwargs) -> ProcessFeatureVector:
     """Build a minimal ProcessFeatureVector with sane defaults."""
-    defaults = dict(
-        pid=100,
-        ppid=4,
-        name="test.exe",
-        image_file_name=r"\Windows\System32\test.exe",
-        process_name_entropy=2.5,
-        path_entropy=3.0,
-        path_depth=4,
-        is_system_path=True,
-        parent_child_legit=True,
-        dll_count=5,
-        suspicious_dll_count=0,
-        has_network_connection=False,
-        network_connection_count=0,
-        external_connection_count=0,
-        malfind_hits=0,
-        vad_rwx_count=0,
-        thread_count=5,
-        handle_count=100,
-        has_encoded_cmdline=False,
-        threat_score=0.05,
-        is_malicious=False,
-        shap_values={},
-    )
+    defaults = {
+        "pid": 100,
+        "ppid": 4,
+        "name": "test.exe",
+        "image_file_name": r"\Windows\System32\test.exe",
+        "process_name_entropy": 2.5,
+        "path_entropy": 3.0,
+        "path_depth": 4,
+        "is_system_path": True,
+        "parent_child_legit": True,
+        "dll_count": 5,
+        "suspicious_dll_count": 0,
+        "has_network_connection": False,
+        "network_connection_count": 0,
+        "external_connection_count": 0,
+        "malfind_hits": 0,
+        "vad_rwx_count": 0,
+        "thread_count": 5,
+        "handle_count": 100,
+        "has_encoded_cmdline": False,
+        "threat_score": 0.05,
+        "is_malicious": False,
+        "shap_values": {},
+    }
     defaults.update(kwargs)
     return ProcessFeatureVector(**defaults)
 

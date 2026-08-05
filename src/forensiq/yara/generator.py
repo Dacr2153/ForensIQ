@@ -83,7 +83,8 @@ IOCs:
 - {{ ioc }}
 {% endfor %}
 
-Output ONLY the YARA rule, starting with 'rule {{ rule_name }} {'. No explanations. No markdown. No code fences.
+Output ONLY the YARA rule, starting with 'rule {{ rule_name }} {'. No explanations.
+No markdown. No code fences.
 """
 
 # ─── YARA Block Parser ────────────────────────────────────────────────────────

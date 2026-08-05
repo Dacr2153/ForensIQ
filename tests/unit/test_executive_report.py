@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from forensiq.reporting.executive import ExecutiveReportGenerator, _EXECUTIVE_PROMPT_TEMPLATE
+from forensiq.reporting.executive import ExecutiveReportGenerator
 
 
 def _make_event(severity: str = "critical", pid: int = 1234, description: str = "test"):
@@ -29,7 +29,12 @@ def _make_proc(name: str = "evil.exe", pid: int = 1234, score: float = 0.99):
     return p
 
 
-def _make_technique(tech_id: str = "T1055", name: str = "Process Injection", tactic: str = "defense-evasion", count: int = 2):
+def _make_technique(
+    tech_id: str = "T1055",
+    name: str = "Process Injection",
+    tactic: str = "defense-evasion",
+    count: int = 2,
+):
     return {"technique_id": tech_id, "name": name, "tactic": tactic, "observation_count": count}
 
 

@@ -90,8 +90,8 @@ def _parse_vol_timestamp(ts: Any) -> datetime | None:
             # Windows FILETIME values are typically > 1e17
             if ts > 1e14:
                 # Convert from Windows FILETIME to Unix epoch
-                EPOCH_DIFF = 11644473600  # seconds between 1601-01-01 and 1970-01-01
-                unix_ts = ts / 1e7 - EPOCH_DIFF
+                epoch_diff = 11644473600  # seconds between 1601-01-01 and 1970-01-01
+                unix_ts = ts / 1e7 - epoch_diff
                 return datetime.fromtimestamp(unix_ts, tz=UTC)
             # Otherwise treat as Unix epoch seconds
             return datetime.fromtimestamp(float(ts), tz=UTC)

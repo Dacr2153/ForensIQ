@@ -233,7 +233,7 @@ def sample_extraction(
 ) -> ExtractionResult:
     """Complete ExtractionResult with all sample data."""
     return ExtractionResult(
-        dump_path="/tmp/test_dump.raw",  # noqa: S108
+        dump_path="/tmp/test_dump.raw",
         dump_sha256="a" * 64,
         dump_size_bytes=1024 * 1024 * 512,  # 512 MB
         process_tree=sample_process_tree,
@@ -324,7 +324,7 @@ def malicious_vector() -> ProcessFeatureVector:
 def mock_vol_runner() -> MagicMock:
     """Mock VolatilityRunner that returns fixture-based data."""
     runner = MagicMock(spec=VolatilityRunner)
-    runner.dump_path = "/tmp/test_dump.raw"  # noqa: S108
+    runner.dump_path = "/tmp/test_dump.raw"
     runner.timeout = 300
     runner.is_linux = False  # default to Windows for existing fixture-based tests
 

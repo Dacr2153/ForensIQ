@@ -100,11 +100,11 @@ class BaseClassifier(abc.ABC):
         Returns:
             Annotated copy with ``threat_score`` and ``is_malicious`` set.
         """
-        from forensiq.models.features import ProcessFeatureVector as PFV
+        from forensiq.models.features import ProcessFeatureVector
 
-        _MIN = 3
-        dummy = PFV(pid=0, name="<placeholder>", ppid=0)
-        padding = [dummy] * (_MIN - 1)
+        min_processes = 3
+        dummy = ProcessFeatureVector(pid=0, name="<placeholder>", ppid=0)
+        padding = [dummy] * (min_processes - 1)
         results = self.predict_batch([vector, *padding])
         for result in results:
             if result.pid == vector.pid:

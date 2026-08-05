@@ -181,6 +181,7 @@ class TestFeatureEngineerEdgeCases:
     def test_compute_no_process_tree_returns_empty(self) -> None:
         """compute() returns [] when process_tree is None."""
         from unittest.mock import MagicMock
+
         from forensiq.features.engineer import FeatureEngineer
 
         engineer = FeatureEngineer()
@@ -192,6 +193,7 @@ class TestFeatureEngineerEdgeCases:
     def test_compute_respects_max_processes_limit(self) -> None:
         """compute() limits processes when MAX_PROCESSES_ANALYZE is set."""
         from datetime import UTC, datetime
+
         from forensiq.extraction.orchestrator import ExtractionResult
         from forensiq.features.engineer import FeatureEngineer
         from forensiq.models.process import ProcessArtifact, ProcessTree
@@ -220,7 +222,7 @@ class TestFeatureEngineerEdgeCases:
         tree = ProcessTree(roots=[], flat_map=flat_map)
 
         extraction = ExtractionResult(
-            dump_path="/tmp/test.raw",  # noqa: S108
+            dump_path="/tmp/test.raw",
             dump_sha256="b" * 64,
             dump_size_bytes=1024,
             process_tree=tree,
@@ -242,6 +244,7 @@ class TestFeatureEngineerEdgeCases:
     def test_compute_parent_mismatch_detected(self) -> None:
         """svchost.exe spawned from cmd.exe → parent_name_mismatch=True."""
         from datetime import UTC, datetime
+
         from forensiq.extraction.orchestrator import ExtractionResult
         from forensiq.features.engineer import FeatureEngineer
         from forensiq.models.process import ProcessArtifact, ProcessTree
@@ -283,7 +286,7 @@ class TestFeatureEngineerEdgeCases:
         tree = ProcessTree(roots=[], flat_map=flat_map)
 
         extraction = ExtractionResult(
-            dump_path="/tmp/test.raw",  # noqa: S108
+            dump_path="/tmp/test.raw",
             dump_sha256="c" * 64,
             dump_size_bytes=1024,
             process_tree=tree,

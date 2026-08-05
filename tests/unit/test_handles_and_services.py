@@ -3,10 +3,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import patch
 
 from forensiq.detectors.base import FindingSeverity
 from forensiq.detectors.handles_mutex import HandlesMutexDetector
@@ -15,35 +12,34 @@ from forensiq.extraction.handles_extractor import HandleEntry
 from forensiq.extraction.services_extractor import ServiceEntry
 from forensiq.models.features import ProcessFeatureVector
 
-
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
 def _vec(**kwargs) -> ProcessFeatureVector:
-    defaults = dict(
-        pid=100,
-        ppid=4,
-        name="test.exe",
-        image_file_name=r"\Windows\System32\test.exe",
-        process_name_entropy=2.5,
-        path_entropy=3.0,
-        path_depth=4,
-        is_system_path=True,
-        parent_child_legit=True,
-        dll_count=5,
-        suspicious_dll_count=0,
-        has_network_connection=False,
-        network_connection_count=0,
-        external_connection_count=0,
-        malfind_hits=0,
-        vad_rwx_count=0,
-        thread_count=5,
-        handle_count=100,
-        has_encoded_cmdline=False,
-        threat_score=0.05,
-        is_malicious=False,
-        shap_values={},
-    )
+    defaults = {
+        "pid": 100,
+        "ppid": 4,
+        "name": "test.exe",
+        "image_file_name": r"\Windows\System32\test.exe",
+        "process_name_entropy": 2.5,
+        "path_entropy": 3.0,
+        "path_depth": 4,
+        "is_system_path": True,
+        "parent_child_legit": True,
+        "dll_count": 5,
+        "suspicious_dll_count": 0,
+        "has_network_connection": False,
+        "network_connection_count": 0,
+        "external_connection_count": 0,
+        "malfind_hits": 0,
+        "vad_rwx_count": 0,
+        "thread_count": 5,
+        "handle_count": 100,
+        "has_encoded_cmdline": False,
+        "threat_score": 0.05,
+        "is_malicious": False,
+        "shap_values": {},
+    }
     defaults.update(kwargs)
     return ProcessFeatureVector(**defaults)
 
@@ -181,7 +177,10 @@ class TestHandlesMutexDetector:
         assert len(results) == 2
 
     def test_non_suspicious_handle_ignored(self, sample_extraction):
-        clean_handle = _handle(handle_type="File", name=r"\Device\HarddiskVolume2\Windows\system32\ntdll.dll")
+        clean_handle = _handle(
+            handle_type="File",
+            name=r"\Device\HarddiskVolume2\Windows\system32\ntdll.dll",
+        )
 
         det = HandlesMutexDetector()
         with (
@@ -213,11 +212,17 @@ class TestHandleEntry:
         assert h.is_suspicious_mutex is False
 
     def test_key_type_run_path_suspicious(self):
-        h = _handle(handle_type="Key", name=r"HKLM\software\microsoft\windows\currentversion\run\evil")
+        h = _handle(
+            handle_type="Key",
+            name=r"HKLM\software\microsoft\windows\currentversion\run\evil",
+        )
         assert h.is_suspicious_registry is True
 
     def test_key_type_clean_path_not_suspicious(self):
-        h = _handle(handle_type="Key", name=r"HKLM\software\microsoft\windows\currentversion\uninstall\foo")
+        h = _handle(
+            handle_type="Key",
+            name=r"HKLM\software\microsoft\windows\currentversion\uninstall\foo",
+        )
         assert h.is_suspicious_registry is False
 
 

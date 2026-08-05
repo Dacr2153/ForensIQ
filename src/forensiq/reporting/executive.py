@@ -26,9 +26,12 @@ if TYPE_CHECKING:
 
 log = get_logger(__name__)
 
-_EXECUTIVE_PROMPT_TEMPLATE = """You are a senior cybersecurity analyst writing an executive incident report.
+_EXECUTIVE_PROMPT_TEMPLATE = """You are a senior cybersecurity analyst writing an executive incident
+report.
 
-Below is the technical summary of a {os_type} memory forensics analysis. Generate a concise, professional executive summary (3-5 paragraphs) in plain English for a CISO audience.
+Below is the technical summary of a {os_type} memory forensics analysis.
+Generate a concise, professional executive summary (3-5 paragraphs) in plain
+English for a CISO audience.
 
 ## Analysis Details:
 - **Dump file**: {dump_filename}
@@ -47,7 +50,10 @@ Below is the technical summary of a {os_type} memory forensics analysis. Generat
 ## Top Malicious Processes:
 {top_processes_text}
 
-Write the executive summary now. Focus on: what was found, what was the likely attack scenario, what is the business risk, and what immediate actions are recommended. Do NOT use bullet points — write in professional prose. Be direct and concise."""
+Write the executive summary now. Focus on: what was found, what was the likely
+attack scenario, what is the business risk, and what immediate actions are
+recommended. Do NOT use bullet points — write in professional prose. Be direct
+and concise."""
 
 
 class ExecutiveReportGenerator:
@@ -167,11 +173,14 @@ class ExecutiveReportGenerator:
 
         mitre_ids = [t["technique_id"] for t in report.mitre_techniques[:5]]
         mitre_str = (
-            f"MITRE ATT&CK techniques observed: {', '.join(mitre_ids)}. " if mitre_ids else ""
+            f"MITRE ATT&CK techniques observed: {', '.join(mitre_ids)}. "
+            if mitre_ids
+            else ""
         )
 
         return (
-            f"ForensIQ {os_type} memory analysis of {dump_name!r} detected {report.malicious_count} malicious "
+            f"ForensIQ {os_type} memory analysis of {dump_name!r} detected"
+            f" {report.malicious_count} malicious "
             f"process(es) out of {report.total_processes} total processes analyzed. "
             f"{top_proc_str}"
             f"The overall threat level is assessed as {threat_level}. "

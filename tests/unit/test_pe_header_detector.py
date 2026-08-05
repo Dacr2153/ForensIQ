@@ -3,12 +3,12 @@
 
 from __future__ import annotations
 
+import importlib.util
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from forensiq.detectors.pe_header import PEHeaderDetector, _PACKER_SECTIONS, _SUSPICIOUS_IMPORTS
-
+from forensiq.detectors.pe_header import _PACKER_SECTIONS, _SUSPICIOUS_IMPORTS, PEHeaderDetector
 
 # ── _hexdump_to_bytes ─────────────────────────────────────────────────────────
 
@@ -114,7 +114,6 @@ class TestDetectWithPefile:
 
     def test_pefile_not_found_import_raises(self):
         """detect() returns [] if pefile raises ImportError."""
-        extraction = self._make_extraction([MagicMock(hexdump="")])
         with patch("builtins.__import__", side_effect=ImportError("no pefile")):
             # The detector wraps in try/except at the top of detect()
             # Just verify no crash
@@ -123,8 +122,8 @@ class TestDetectWithPefile:
     def test_hollow_pe_detection(self):
         """A PE with 0 sections triggers CRITICAL finding."""
         try:
-            import pefile
-        except ImportError:
+            importlib.util.find_spec("pefile")
+        except (ImportError, ModuleNotFoundError):
             pytest.skip("pefile not installed")
 
         import struct
@@ -157,7 +156,7 @@ class TestDetectWithPefile:
         extraction = self._make_extraction([region])
 
         try:
-            results = self.det.detect(extraction, [])
+            self.det.detect(extraction, [])
             # If we get here, pefile parsed the PE
             # May or may not find hollow PE depending on pefile strictness
             # Just verify no exception

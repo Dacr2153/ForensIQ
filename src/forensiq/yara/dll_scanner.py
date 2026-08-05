@@ -39,7 +39,7 @@ log = get_logger(__name__)
 _BUILTIN_RULES_SOURCE = r"""
 rule forensiq_pe_in_injected_memory {
     meta:
-        description = "PE header (MZ) found in injected/private memory region — process hollowing or reflective DLL injection"
+        description = "PE header (MZ) in injected/private memory — hollowing or injection"
         author      = "ForensIQ Built-in"
         severity    = "high"
     strings:
@@ -51,7 +51,7 @@ rule forensiq_pe_in_injected_memory {
 
 rule forensiq_nop_sled_shellcode {
     meta:
-        description = "NOP sled pattern detected in injected memory region — common shellcode precursor"
+        description = "NOP sled pattern in injected memory — common shellcode precursor"
         author      = "ForensIQ Built-in"
         severity    = "high"
     strings:

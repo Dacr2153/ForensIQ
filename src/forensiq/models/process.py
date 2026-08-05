@@ -43,7 +43,10 @@ class ProcessArtifact(BaseModel):
     # Command line — from windows.cmdline plugin (separate from pslist)
     cmdline: str | None = Field(
         None,
-        description="Command line arguments from PEB. None if process is terminated or cmdline unavailable.",
+        description=(
+            "Command line arguments from PEB. None if process is terminated or"
+            " cmdline unavailable."
+        ),
     )
 
     # Timestamps

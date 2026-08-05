@@ -5,15 +5,10 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import pytest
-
 from forensiq.extraction.handles_extractor import (
     HandleEntry,
     HandlesExtractor,
-    _MALWARE_MUTEX_PATTERNS,
-    _SUSPICIOUS_REG_PATHS,
 )
-
 
 # ── HandleEntry properties ────────────────────────────────────────────────────
 
@@ -54,7 +49,10 @@ class TestHandleEntryProperties:
     # is_suspicious_registry
 
     def test_run_registry_key_suspicious(self):
-        entry = self._make_handle("Key", "\\REGISTRY\\MACHINE\\SOFTWARE\\CurrentVersion\\Run\\malware")
+        entry = self._make_handle(
+            "Key",
+            "\\REGISTRY\\MACHINE\\SOFTWARE\\CurrentVersion\\Run\\malware",
+        )
         assert entry.is_suspicious_registry is True
 
     def test_runonce_registry_key_suspicious(self):
@@ -62,12 +60,19 @@ class TestHandleEntryProperties:
         assert entry.is_suspicious_registry is True
 
     def test_services_registry_suspicious(self):
-        entry = self._make_handle("Key", "\\REGISTRY\\MACHINE\\SYSTEM\\CurrentControlSet\\Services\\evil")
+        entry = self._make_handle(
+            "Key",
+            "\\REGISTRY\\MACHINE\\SYSTEM\\CurrentControlSet\\Services\\evil",
+        )
         assert entry.is_suspicious_registry is True
 
     def test_winlogon_registry_suspicious(self):
         # Pattern requires "\\winlogon\\" — must have trailing backslash
-        entry = self._make_handle("Key", "\\REGISTRY\\MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon\\subkey")
+        entry = self._make_handle(
+            "Key",
+            "\\REGISTRY\\MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\"
+            "Winlogon\\subkey",
+        )
         assert entry.is_suspicious_registry is True
 
     def test_clean_registry_key_not_suspicious(self):

@@ -281,7 +281,10 @@ class DiffPipeline:
 
     @staticmethod
     def _conn_key(conn: Any) -> str:  # type: ignore[return]
-        return f"{conn.proto}:{conn.local_addr}:{conn.local_port}-{conn.remote_addr}:{conn.remote_port}"
+        return (
+            f"{conn.proto}:{conn.local_addr}:{conn.local_port}"
+            f"-{conn.remote_addr}:{conn.remote_port}"
+        )
 
     @staticmethod
     def _conn_to_dict(conn: Any) -> dict[str, Any]:  # type: ignore[return]

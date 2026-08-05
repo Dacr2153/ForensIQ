@@ -3,8 +3,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from forensiq.utils.exceptions import (
     AcquisitionError,
     ClassificationError,
@@ -23,7 +21,6 @@ from forensiq.utils.exceptions import (
     VolatilityTimeoutError,
     YARACompilationError,
     YARAError,
-    YARAGenerationError,
 )
 
 

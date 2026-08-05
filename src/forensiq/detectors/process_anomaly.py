@@ -387,14 +387,14 @@ class ProcessAnomalyDetector(BaseDetector):
     ) -> list[DetectorResult]:
         """Flag Linux processes executing from suspicious directories (/tmp, /dev/shm, etc.)."""
         results = []
-        _SUSPICIOUS_LINUX_DIRS = ("/tmp/", "/dev/shm/", "/var/tmp/", "/run/user/")  # noqa: S108
+        suspicious_linux_dirs = ("/tmp/", "/dev/shm/", "/var/tmp/", "/run/user/")  # noqa: S108
 
         # Get full exe path from process tree (image_file_name)
         proc = extraction.process_tree.flat_map.get(v.pid) if extraction.process_tree else None
         exe_path = (proc.image_file_name if proc else "") or ""
 
         if exe_path:
-            for sus_dir in _SUSPICIOUS_LINUX_DIRS:
+            for sus_dir in suspicious_linux_dirs:
                 if exe_path.startswith(sus_dir):
                     results.append(
                         DetectorResult(
@@ -407,7 +407,8 @@ class ProcessAnomalyDetector(BaseDetector):
                                 f"Process {v.name!r} (PID {v.pid}) is executing from "
                                 f"{exe_path!r}. Legitimate system services never execute from "
                                 f"world-writable directories like /tmp or /dev/shm. "
-                                f"This is a strong indicator of malware persistence or fileless execution."
+                                f"This is a strong indicator of malware persistence or"
+                                " fileless execution."
                             ),
                             mitre_technique="T1204.002",
                             mitre_technique_name="User Execution: Malicious File",

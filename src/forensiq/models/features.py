@@ -229,13 +229,19 @@ class ProcessFeatureVector(BaseModel):
     # ─── Classification Results (filled post-inference) ───────────────────────
     threat_score: float = Field(
         default=0.0,
-        description="Calibrated probability of maliciousness from the XGBoost classifier [0.0, 1.0]",
+        description=(
+            "Calibrated probability of maliciousness from the XGBoost classifier"
+            " [0.0, 1.0]"
+        ),
         ge=0.0,
         le=1.0,
     )
     isolation_score: float = Field(
         default=0.0,
-        description="IsolationForest anomaly score normalized to [0.0, 1.0] (higher = more anomalous)",
+        description=(
+            "IsolationForest anomaly score normalized to [0.0, 1.0]"
+            " (higher = more anomalous)"
+        ),
         ge=0.0,
         le=1.0,
     )
@@ -247,7 +253,10 @@ class ProcessFeatureVector(BaseModel):
     )
     is_malicious: bool = Field(
         default=False,
-        description="True if ensemble_score >= THREAT_THRESHOLD (configured via FORENSIQ_THREAT_THRESHOLD)",
+        description=(
+            "True if ensemble_score >= THREAT_THRESHOLD (configured via"
+            " FORENSIQ_THREAT_THRESHOLD)"
+        ),
     )
     shap_values: dict[str, float] = Field(
         default_factory=dict,

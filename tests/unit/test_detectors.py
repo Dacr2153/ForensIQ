@@ -55,7 +55,7 @@ def _make_extraction(processes: list | None = None) -> MagicMock:
     proc_tree.flat_map = {v.pid: v for v in (processes or [])}
     extraction.process_tree = proc_tree
     extraction.dump_path = MagicMock()
-    extraction.dump_path.__str__ = lambda _: "/tmp/test.raw"  # noqa: S108
+    extraction.dump_path.__str__ = lambda _: "/tmp/test.raw"
     extraction.malfind = {}
     extraction.dlls = {}
     extraction.is_linux = False  # Windows mode by default for these tests
@@ -245,6 +245,28 @@ class TestBuildDefaultRegistry:
         }
         assert expected == names
 
+    def test_registers_threat_intel_when_vt_key_present(self) -> None:
+        registry = build_default_registry(vt_api_key="test_key")
+        assert len(registry) == 7
+        assert "threat_intel" in registry.detector_names
+
+    def test_threat_intel_enabled_when_vt_key_present(self) -> None:
+        registry = build_default_registry(vt_api_key="test_key")
+        threat_detector = next(
+            d for d in registry._detectors if d.name == "threat_intel"
+        )
+        assert threat_detector.enabled_by_default is True
+
+    def test_threat_intel_omitted_without_vt_key(self) -> None:
+        registry = build_default_registry()
+        assert "threat_intel" not in registry.detector_names
+
+    def test_linux_registry_excludes_windows_detectors(self) -> None:
+        registry = build_default_registry(is_linux=True)
+        assert "cross_view" not in registry.detector_names
+        assert "services_scan" not in registry.detector_names
+        assert "handles_mutex" not in registry.detector_names
+
 
 # ─── ProcessAnomalyDetector ───────────────────────────────────────────────────
 
@@ -410,7 +432,7 @@ class TestProcessAnomalyDetector:
 
         dll1 = MagicMock()
         dll1.is_suspicious = True
-        dll1.full_path = "/tmp/rootkit.so"  # noqa: S108
+        dll1.full_path = "/tmp/rootkit.so"
 
         extraction = _make_extraction([v])
         extraction.is_linux = True
@@ -755,8 +777,9 @@ class TestCrossViewDetectorEdgeCases:
 
     def test_psscan_exception_returns_empty(self) -> None:
         """If psscan raises, detect() returns []."""
-        from forensiq.detectors.cross_view import CrossViewDetector
         from unittest.mock import patch
+
+        from forensiq.detectors.cross_view import CrossViewDetector
 
         detector = CrossViewDetector()
         extraction = _make_extraction([_make_vector(pid=100, name="svchost.exe")])
@@ -767,8 +790,9 @@ class TestCrossViewDetectorEdgeCases:
 
     def test_psscan_empty_returns_empty(self) -> None:
         """If psscan returns no rows, detect() returns []."""
-        from forensiq.detectors.cross_view import CrossViewDetector
         from unittest.mock import patch
+
+        from forensiq.detectors.cross_view import CrossViewDetector
 
         detector = CrossViewDetector()
         extraction = _make_extraction([_make_vector(pid=100, name="svchost.exe")])

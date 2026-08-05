@@ -3,8 +3,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from forensiq.utils.exceptions import (
@@ -21,7 +19,6 @@ from forensiq.utils.logger import (
     configure_logging,
     get_logger,
 )
-
 
 # ── configure_logging / get_logger ────────────────────────────────────────────
 
@@ -129,9 +126,12 @@ class TestForensiqErrors:
 class TestBindAnalysisContextCoverage:
     def test_correlation_id_injected(self):
         """bind_analysis_context with correlation_id covers ContextVar set path."""
-        from forensiq.utils.logger import bind_analysis_context, get_logger
-        log = get_logger("test")
-        with bind_analysis_context(correlation_id="abc-123", dump_path="/tmp/mem.raw", phase="extraction"):
+        from forensiq.utils.logger import bind_analysis_context
+        with bind_analysis_context(
+            correlation_id="abc-123",
+            dump_path="/tmp/mem.raw",
+            phase="extraction",
+        ):
             # Just ensure it doesn't raise
             pass
 
