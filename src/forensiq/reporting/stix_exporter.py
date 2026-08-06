@@ -47,7 +47,7 @@ class STIXExporter:
         Raises:
             ImportError: If stix2 is not installed.
         """
-        import stix2  # type: ignore[import]
+        import stix2
 
         objects: list[Any] = []
         now = datetime.now(tz=UTC)

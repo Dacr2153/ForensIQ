@@ -22,7 +22,7 @@ import json
 import re
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from forensiq.config.settings import get_settings
 from forensiq.utils.exceptions import (
@@ -31,6 +31,9 @@ from forensiq.utils.exceptions import (
     VolatilityTimeoutError,
 )
 from forensiq.utils.logger import get_logger
+
+if TYPE_CHECKING:
+    from forensiq.cache.plugin_cache import PluginCache
 
 log = get_logger(__name__)
 
@@ -130,9 +133,9 @@ class VolatilityRunner:
         self.dump_sha256 = dump_sha256  # set after hash computed to enable plugin caching
         self._settings = get_settings()
         # Lazy import to avoid circular dependency at module load time
-        self._plugin_cache: Any | None = None
+        self._plugin_cache: PluginCache | None = None
 
-    def _get_cache(self) -> Any:
+    def _get_cache(self) -> PluginCache:
         """Return the PluginCache instance (lazy init)."""
         if self._plugin_cache is None:
             from forensiq.cache.plugin_cache import PluginCache
@@ -248,7 +251,7 @@ class VolatilityRunner:
         # Handle dict-of-rows format (some plugins may use this)
         if isinstance(data, list):
             if all(isinstance(item, dict) for item in data):
-                return data  # type: ignore[return-value]
+                return data
 
         # Unknown format — log and return empty
         log.warning(

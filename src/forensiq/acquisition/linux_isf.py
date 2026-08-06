@@ -76,7 +76,7 @@ _FORENSIQ_SYMBOLS_DIR = Path.home() / ".forensiq" / "symbols" / "linux"
 # cover per-CPU / BPF variables, not the kernel globals used by vol3 plugins.
 # This table provides the type references for all symbols accessed this way
 # by the Linux plugins that ForensIQ uses.
-_SYMBOL_TYPES: dict[str, dict] = {
+_SYMBOL_TYPES: dict[str, dict[str, Any]] = {
     # linux.pslist / linux.psaux ─────────────────────────────────────
     "init_task": {"kind": "struct", "name": "task_struct"},
     # linux.sockstat ─────────────────────────────────────────────────
@@ -167,7 +167,7 @@ class _BTFParser:
 
             elif kind in (_KIND_STRUCT, _KIND_UNION):
                 t["size"] = size_or_type
-                members: list[dict] = []
+                members: list[dict[str, Any]] = []
                 for _ in range(vlen):
                     if pos + 12 > n:
                         break
@@ -243,7 +243,7 @@ class _BTFParser:
 class _ISFBuilder:
     """Convert a parsed BTF type table + System.map into a Volatility 3 ISF dict."""
 
-    _DEFAULT_BASE_TYPES: ClassVar[dict[str, dict]] = {
+    _DEFAULT_BASE_TYPES: ClassVar[dict[str, dict[str, Any]]] = {
         "void": {"endian": "little", "kind": "int", "signed": False, "size": 0},
         "pointer": {"endian": "little", "kind": "int", "signed": False, "size": 8},
         "char": {"endian": "little", "kind": "char", "signed": True, "size": 1},
@@ -282,10 +282,10 @@ class _ISFBuilder:
 
     def _flatten_struct_fields(
         self,
-        members: list[dict],
+        members: list[dict[str, Any]],
         parent_bit_offset: int,
         depth: int = 0,
-    ) -> dict[str, dict]:
+    ) -> dict[str, dict[str, Any]]:
         """Recursively flatten anonymous embedded struct/union members.
 
         Linux kernel structs built with CONFIG_RANDSTRUCT (e.g. mm_struct) wrap
@@ -297,7 +297,7 @@ class _ISFBuilder:
         """
         if depth > 8:  # guard against pathological nesting
             return {}
-        fields: dict[str, dict] = {}
+        fields: dict[str, dict[str, Any]] = {}
         for m in members:
             m_name = m["name"]
             abs_bit_off = parent_bit_offset + m["bit_offset"]
@@ -320,7 +320,7 @@ class _ISFBuilder:
             }
         return fields
 
-    def _type_ref(self, type_id: int) -> dict:
+    def _type_ref(self, type_id: int) -> dict[str, Any]:
         """Return a Volatility 3 ISF type reference dict for BTF type_id."""
         if type_id == 0:
             return {"kind": "base", "name": "void"}
@@ -357,8 +357,8 @@ class _ISFBuilder:
             return {"kind": "pointer", "subtype": {"kind": "base", "name": "void"}}
         return {"kind": "base", "name": "void"}
 
-    def _parse_system_map(self, path: Path) -> dict[str, dict]:
-        symbols: dict[str, dict] = {}
+    def _parse_system_map(self, path: Path) -> dict[str, dict[str, Any]]:
+        symbols: dict[str, dict[str, Any]] = {}
         try:
             for line in path.read_text(errors="replace").splitlines():
                 parts = line.split()
@@ -371,10 +371,10 @@ class _ISFBuilder:
             pass
         return symbols
 
-    def build(self, system_map: Path | None, release: str) -> dict:
-        base_types: dict[str, dict] = dict(self._DEFAULT_BASE_TYPES)
-        user_types: dict[str, dict] = {}
-        enums: dict[str, dict] = {}
+    def build(self, system_map: Path | None, release: str) -> dict[str, Any]:
+        base_types: dict[str, dict[str, Any]] = dict(self._DEFAULT_BASE_TYPES)
+        user_types: dict[str, dict[str, Any]] = {}
+        enums: dict[str, dict[str, Any]] = {}
 
         for tid, t in self._btf.types.items():
             kind = t["kind"]

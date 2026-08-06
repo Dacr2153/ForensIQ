@@ -191,6 +191,10 @@ class ForensiqClassifier(BaseClassifier):
 
         # Get calibrated probabilities for the malicious class (XGBoost)
         try:
+            if self._model is None:
+                raise ClassificationError(
+                    message="Model not loaded — call load_model() before classify().",
+                )
             proba = self._model.predict_proba(feature_matrix)
         except Exception as exc:
             raise ClassificationError(

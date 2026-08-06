@@ -74,7 +74,13 @@ class TimelineRule(abc.ABC):
 class MalfindHitsRule(TimelineRule):
     """T1055 — Process Injection via malfind RWX regions."""
 
-    def build_event(self, vector, is_linux, baseline_sev, now):
+    def build_event(
+        self,
+        vector: ProcessFeatureVector,
+        is_linux: bool,
+        baseline_sev: str,
+        now: datetime,
+    ) -> ThreatEvent | None:
         if vector.malfind_hits <= 0:
             return None
         return ThreatEvent(
@@ -97,7 +103,13 @@ class MalfindHitsRule(TimelineRule):
 class VADRWXRule(TimelineRule):
     """T1055.012 — Process Hollowing via RWX VAD regions."""
 
-    def build_event(self, vector, is_linux, baseline_sev, now):
+    def build_event(
+        self,
+        vector: ProcessFeatureVector,
+        is_linux: bool,
+        baseline_sev: str,
+        now: datetime,
+    ) -> ThreatEvent | None:
         if vector.vad_rwx_count <= 2:
             return None
         return ThreatEvent(
@@ -120,7 +132,13 @@ class VADRWXRule(TimelineRule):
 class EncodedCmdlineRule(TimelineRule):
     """T1059.001 — Encoded/obfuscated PowerShell (Windows only)."""
 
-    def build_event(self, vector, is_linux, baseline_sev, now):
+    def build_event(
+        self,
+        vector: ProcessFeatureVector,
+        is_linux: bool,
+        baseline_sev: str,
+        now: datetime,
+    ) -> ThreatEvent | None:
         # Skipped on Linux: bare hex patterns match SHA-256 hashes and git
         # commit hashes that are legitimately present in Linux process cmdlines.
         if not vector.has_encoded_cmdline or is_linux:
@@ -145,7 +163,13 @@ class EncodedCmdlineRule(TimelineRule):
 class MasqueradingRule(TimelineRule):
     """T1036.005 — Process masquerading via high name entropy outside system paths."""
 
-    def build_event(self, vector, is_linux, baseline_sev, now):
+    def build_event(
+        self,
+        vector: ProcessFeatureVector,
+        is_linux: bool,
+        baseline_sev: str,
+        now: datetime,
+    ) -> ThreatEvent | None:
         if vector.process_name_entropy <= 3.5 or vector.is_system_path:
             return None
         return ThreatEvent(
@@ -168,7 +192,13 @@ class MasqueradingRule(TimelineRule):
 class C2ConnectionRule(TimelineRule):
     """T1071 — External C2 connections."""
 
-    def build_event(self, vector, is_linux, baseline_sev, now):
+    def build_event(
+        self,
+        vector: ProcessFeatureVector,
+        is_linux: bool,
+        baseline_sev: str,
+        now: datetime,
+    ) -> ThreatEvent | None:
         if vector.external_connection_count <= 0:
             return None
         return ThreatEvent(
@@ -190,7 +220,13 @@ class C2ConnectionRule(TimelineRule):
 class LsasDumpingRule(TimelineRule):
     """T1003.001 — LSASS credential dumping via suspicious DLLs."""
 
-    def build_event(self, vector, is_linux, baseline_sev, now):
+    def build_event(
+        self,
+        vector: ProcessFeatureVector,
+        is_linux: bool,
+        baseline_sev: str,
+        now: datetime,
+    ) -> ThreatEvent | None:
         if vector.name.lower() not in ("lsass.exe", "lsass"):
             return None
         if vector.suspicious_dll_count <= 0:
@@ -214,7 +250,13 @@ class LsasDumpingRule(TimelineRule):
 class SuspiciousDLLRule(TimelineRule):
     """T1140 — Deobfuscation / suspicious DLLs in non-lsass processes."""
 
-    def build_event(self, vector, is_linux, baseline_sev, now):
+    def build_event(
+        self,
+        vector: ProcessFeatureVector,
+        is_linux: bool,
+        baseline_sev: str,
+        now: datetime,
+    ) -> ThreatEvent | None:
         if vector.suspicious_dll_count <= 0:
             return None
         if vector.name.lower() in ("lsass.exe", "lsass"):

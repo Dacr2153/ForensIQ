@@ -191,7 +191,7 @@ class YARADLLScanner:
         self._rule_meta: dict[str, dict[str, str]] = {}
 
         try:
-            import yara  # type: ignore[import]
+            import yara
 
             sources: dict[str, str] = {"builtin": _BUILTIN_RULES_SOURCE}
 

@@ -16,12 +16,16 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from rich import box
 from rich.console import Console
 from rich.panel import Panel
 from rich.rule import Rule
 from rich.table import Table
+
+if TYPE_CHECKING:
+    from forensiq.pipeline.analysis_pipeline import PipelineResult
 
 console = Console()
 err_console = Console(stderr=True)
@@ -106,7 +110,7 @@ def _ask_text(message: str, default: str = "") -> str | None:
     import questionary
 
     result = questionary.text(message, default=default, style=_qs_style()).ask()
-    return result
+    return str(result) if result is not None else None
 
 
 def _ask_confirm(message: str, default: bool = True) -> bool:
@@ -117,7 +121,7 @@ def _ask_confirm(message: str, default: bool = True) -> bool:
     return bool(result)
 
 
-def _qs_style():
+def _qs_style() -> Any:
     """questionary custom style matching ForensIQ dark theme."""
     from questionary import Style
 
@@ -506,7 +510,7 @@ def _menu_live() -> None:
     _run_live_pipeline(dump_path, output_dir, no_yara=no_yara)
 
 
-def _run_live_kcore(reqs: dict) -> None:
+def _run_live_kcore(reqs: dict[str, Any]) -> None:
     """Run live analysis using /proc/kcore (called when kcore is ready)."""
     console.print(
         Panel(
@@ -559,7 +563,7 @@ def _run_pipeline_with_progress(
     threshold: float | None = None,
     generate_yara: bool = True,
     force_reanalyze: bool = False,
-):
+) -> PipelineResult | None:
     """Run the analysis pipeline and show a clean live progress table.
 
     Silences structured log output (level WARNING) and replaces it with
@@ -624,30 +628,30 @@ def _run_pipeline_with_progress(
             t.add_row(str(i), label_str, status_label.get(st, ""), stage_detail.get(key, ""))
         return t
 
-    def _on_stage(stage: str, data: object) -> None:
+    def _on_stage(stage: str, data: Any) -> None:
         if stage == "classification":
-            vectors = data  # type: ignore[assignment]
-            mal = sum(1 for v in vectors if getattr(v, "is_malicious", False))  # type: ignore[union-attr]
+            vectors = data
+            mal = sum(1 for v in vectors if getattr(v, "is_malicious", False))
             sus = sum(
                 1
                 for v in vectors
                 if not getattr(v, "is_malicious", False) and getattr(v, "threat_score", 0) >= 0.35
-            )  # type: ignore[union-attr]
-            total = len(vectors)  # type: ignore[arg-type]
+            )
+            total = len(vectors)
             stage_detail["classification"] = (
                 f"{total} processes  |  {mal} malicious  |  {sus} suspicious"
             )
         elif stage == "detectors":
-            findings = data  # type: ignore[assignment]
-            crit = sum(1 for f in findings if getattr(f, "severity", "") in ("critical", "high"))  # type: ignore[union-attr]
-            stage_detail["detectors"] = f"{len(findings)} findings  |  {crit} critical/high"  # type: ignore[arg-type]
+            findings = data
+            crit = sum(1 for f in findings if getattr(f, "severity", "") in ("critical", "high"))
+            stage_detail["detectors"] = f"{len(findings)} findings  |  {crit} critical/high"
         elif stage == "yara":
-            rules = data  # type: ignore[assignment]
-            valid = sum(1 for r in rules if getattr(r, "is_valid", False))  # type: ignore[union-attr]
-            stage_detail["yara"] = f"{valid}/{len(rules)} rules valid"  # type: ignore[arg-type]
+            rules = data
+            valid = sum(1 for r in rules if getattr(r, "is_valid", False))
+            stage_detail["yara"] = f"{valid}/{len(rules)} rules valid"
         elif stage == "mitre":
-            techniques = data  # type: ignore[assignment]
-            cnt = len(techniques)  # type: ignore[arg-type]
+            techniques = data
+            cnt = len(techniques)
             if cnt:
                 existing = stage_detail.get("detectors", "")
                 stage_detail["detectors"] = (
@@ -826,7 +830,7 @@ def _menu_history() -> None:
 
     import asyncio
 
-    async def _fetch():
+    async def _fetch() -> list[dict[str, Any]]:
         from forensiq.db.manager import ForensiqDatabase
 
         async with ForensiqDatabase() as db:

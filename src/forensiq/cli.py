@@ -21,7 +21,9 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import typer
 from rich import box
@@ -30,6 +32,11 @@ from rich.panel import Panel
 from rich.table import Table
 
 from forensiq.utils.logger import configure_logging, get_logger
+
+if TYPE_CHECKING:
+    from forensiq.models.report import ForensiqReport
+    from forensiq.pipeline.analysis_pipeline import PipelineResult
+    from forensiq.pipeline.diff_pipeline import ProcessDiff
 
 app = typer.Typer(
     name="forensiq",
@@ -69,7 +76,7 @@ def analyze(
         resolve_path=True,
     ),
     threshold: float = typer.Option(
-        None,  # type: ignore[assignment]
+        None,
         "--threshold",
         "-t",
         help="Threat score threshold for 'malicious' classification (0.0-1.0). "
@@ -168,7 +175,7 @@ def analyze(
     # Returns True to proceed with full re-analysis, False to use cached result.
     is_tty = sys.stdin.isatty()
 
-    def _on_cached_result(cached: dict) -> bool:
+    def _on_cached_result(cached: dict[str, Any]) -> bool:
         """Show cached analysis summary and ask user whether to re-analyze."""
         _print_cached_analysis_info(cached, console)
         if force:
@@ -262,7 +269,7 @@ def analyze(
     raise typer.Exit(code=result.exit_code)
 
 
-def _print_cached_analysis_info(cached: dict, console: Console) -> None:
+def _print_cached_analysis_info(cached: dict[str, Any], console: Console) -> None:
     """Display a summary of a previously cached analysis to the user."""
 
     ts = cached.get("analysis_ts", "unknown")
@@ -290,7 +297,7 @@ def _print_cached_analysis_info(cached: dict, console: Console) -> None:
     )
 
 
-def _print_summary(report, result) -> None:  # type: ignore[no-untyped-def]
+def _print_summary(report: ForensiqReport, result: PipelineResult) -> None:
     """Print analysis summary to console."""
     threat_colors = {
         "critical": "red",
@@ -369,7 +376,7 @@ def _print_summary(report, result) -> None:  # type: ignore[no-untyped-def]
     console.print()
 
 
-def _make_stream_callback(console: Console):  # type: ignore[no-untyped-def]
+def _make_stream_callback(console: Console) -> Callable[[str, Any], None]:
     """Build a streaming callback that prints incremental results as each phase completes.
 
     Returns a callable suitable for AnalysisPipeline(on_stage_complete=...).
@@ -383,10 +390,10 @@ def _make_stream_callback(console: Console):  # type: ignore[no-untyped-def]
     from rich.rule import Rule
     from rich.table import Table
 
-    def _callback(stage: str, data: object) -> None:
+    def _callback(stage: str, data: Any) -> None:
         if stage == "classification":
             vectors = data  # list[ProcessFeatureVector]
-            suspicious = [v for v in vectors if v.threat_score >= 0.35]  # type: ignore[union-attr]
+            suspicious = [v for v in vectors if v.threat_score >= 0.35]
             if not suspicious:
                 return
             console.print()
@@ -411,7 +418,7 @@ def _make_stream_callback(console: Console):  # type: ignore[no-untyped-def]
             findings = data  # list[DetectorResult]
             critical_high = [
                 f for f in findings if getattr(f, "severity", "") in ("critical", "high")
-            ]  # type: ignore[union-attr]
+            ]
             if not critical_high:
                 return
             console.print()
@@ -432,10 +439,10 @@ def _make_stream_callback(console: Console):  # type: ignore[no-untyped-def]
 
         elif stage == "yara":
             rules = data  # list[YARAResult]
-            valid = [r for r in rules if getattr(r, "is_valid", False)]  # type: ignore[union-attr]
+            valid = [r for r in rules if getattr(r, "is_valid", False)]
             console.print()
             console.print(
-                f"  [cyan]YARA:[/cyan] {len(valid)}/{len(rules)} rules generated and validated"  # type: ignore[arg-type]
+                f"  [cyan]YARA:[/cyan] {len(valid)}/{len(rules)} rules generated and validated"
             )
 
         elif stage == "mitre":
@@ -446,7 +453,7 @@ def _make_stream_callback(console: Console):  # type: ignore[no-untyped-def]
             console.print(
                 Rule("[bold blue]Streaming — MITRE ATT&CK Techniques Detected[/bold blue]")
             )
-            for t in techniques[:8]:  # type: ignore[union-attr]
+            for t in techniques[:8]:
                 tid = t.get("technique_id", "?")
                 name = t.get("name", "?")
                 count = t.get("observation_count", 0)
@@ -491,7 +498,7 @@ def train(
         resolve_path=True,
     ),
     output: Path = typer.Option(
-        None,  # type: ignore[assignment]
+        None,
         "--output",
         help="Output directory for model file. Defaults to forensiq config path.",
         resolve_path=True,
@@ -661,7 +668,7 @@ def check() -> None:
 
     # yara-python
     try:
-        import yara  # type: ignore[import]
+        import yara
 
         yara.compile(source="rule test { condition: false }")
         add_row("yara-python", True, "yara module available, compile test passed")
@@ -1219,7 +1226,7 @@ def diff_cmd(
     diff_table.add_column("Count", width=8)
     diff_table.add_column("Processes")
 
-    def _pids_str(procs: list) -> str:
+    def _pids_str(procs: list[ProcessDiff]) -> str:
         return ", ".join(f"{p.name}({p.pid})" for p in procs[:10]) + (
             f" … +{len(procs) - 10} more" if len(procs) > 10 else ""
         )

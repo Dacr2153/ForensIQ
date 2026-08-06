@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, computed_field, field_validator
 
@@ -243,7 +243,7 @@ class ForensiqReport(BaseModel):
     # ─── DLL / Malfind YARA scan hits ─────────────────────────────────────────
     # Results from scanning injected memory regions with built-in YARA rules.
     # Each item is a dict serialized from YARADLLHit.
-    dll_yara_hits: list[dict] = Field(
+    dll_yara_hits: list[dict[str, Any]] = Field(
         default_factory=list,
         description="Built-in YARA rule matches found in injected/malfind memory regions.",
     )
@@ -277,13 +277,13 @@ class ForensiqReport(BaseModel):
     # ─── Detector plugin findings ─────────────────────────────────────────────
     # Results from all DetectorPlugin runs (cross-view, PE analysis, etc.)
     # Stored as plain dicts for JSON serialization compatibility.
-    detector_findings: list[dict] = Field(
+    detector_findings: list[dict[str, Any]] = Field(
         default_factory=list,
         description="Findings from the DetectorRegistry plugin system.",
     )
 
     # ─── MITRE ATT&CK coverage ────────────────────────────────────────────────
-    mitre_techniques: list[dict] = Field(
+    mitre_techniques: list[dict[str, Any]] = Field(
         default_factory=list,
         description="Deduplicated list of all MITRE ATT&CK techniques observed.",
     )

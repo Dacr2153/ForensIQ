@@ -357,7 +357,7 @@ class VADExtractor:
         """Async variant: run malfind plugin, with /proc fallback for Linux."""
         log.info("Extracting malfind regions (async)")
         plugin = "linux.malware.malfind" if self._runner.is_linux else "windows.malfind"
-        rows: list[dict] = []
+        rows: list[dict[str, Any]] = []
         try:
             rows = await self._runner.run_plugin_async(plugin)
         except Exception as exc:
@@ -394,7 +394,7 @@ class VADExtractor:
             return {}
         log.info("Extracting VAD entries (async, selective)", requested_pids=sorted(pids))
         plugin = "linux.proc" if self._runner.is_linux else "windows.vadinfo"
-        rows: list[dict] = []
+        rows: list[dict[str, Any]] = []
         try:
             rows = await self._runner.run_plugin_async(plugin)
         except Exception as exc:

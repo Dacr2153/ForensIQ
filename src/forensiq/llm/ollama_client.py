@@ -277,7 +277,7 @@ class OllamaClient:
 
         try:
             data = response.json()
-            text = data.get("response", "")
+            text = str(data.get("response", ""))
         except Exception as exc:
             raise OllamaConnectionError(
                 base_url=self.base_url,

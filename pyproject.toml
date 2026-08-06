@@ -152,14 +152,14 @@ plugins = ["pydantic.mypy"]
 # Libraries without full type stubs
 module = [
     "yara",
-    "volatility3.*",
     "xgboost",
     "shap",
-    "optuna",
     "joblib",
     "sklearn.*",
-    "matplotlib.*",
     "structlog.*",
+    "pandas",
+    "pefile",
+    "stix2",
 ]
 ignore_missing_imports = true
 

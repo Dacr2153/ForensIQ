@@ -264,7 +264,7 @@ def _validate_yara_rule(rule_text: str, rule_name: str) -> tuple[bool, str]:
         error_message is empty string if is_valid=True.
     """
     try:
-        import yara  # type: ignore[import]
+        import yara
 
         if not rule_text or not rule_text.strip():
             return False, "Empty rule text"

@@ -23,11 +23,11 @@ from __future__ import annotations
 
 import logging
 import sys
-from collections.abc import Generator
+from collections.abc import Generator, Mapping, MutableMapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import structlog
 
@@ -47,8 +47,8 @@ _dump_basename: ContextVar[str] = ContextVar("dump_basename", default="")
 def _add_correlation_id(
     logger: Any,
     method: str,
-    event_dict: dict[str, Any],
-) -> dict[str, Any]:
+    event_dict: MutableMapping[str, Any],
+) -> Mapping[str, Any]:
     """Inject correlation_id from context variable into every log event."""
     cid = _correlation_id.get()
     if cid:
@@ -59,8 +59,8 @@ def _add_correlation_id(
 def _add_analysis_context(
     logger: Any,
     method: str,
-    event_dict: dict[str, Any],
-) -> dict[str, Any]:
+    event_dict: MutableMapping[str, Any],
+) -> Mapping[str, Any]:
     """Inject analysis phase and dump name into log events when set."""
     phase = _analysis_phase.get()
     dump = _dump_basename.get()
@@ -167,7 +167,7 @@ def get_logger(name: str) -> structlog.stdlib.BoundLogger:
         log = get_logger(__name__)
         log.info("Plugin complete", plugin="windows.pslist", rows=42)
     """
-    return structlog.get_logger(name)
+    return cast(structlog.stdlib.BoundLogger, structlog.get_logger(name))
 
 
 # ─── Context Managers ─────────────────────────────────────────────────────────

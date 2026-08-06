@@ -26,6 +26,7 @@ Usage:
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -610,7 +611,7 @@ class ExtractionOrchestrator:
 
     def _run_with_progress(
         self,
-        steps: list[tuple[str, object]],
+        steps: Sequence[tuple[str, Callable[[], None]]],
         result: ExtractionResult,
     ) -> None:
         """Run all extraction steps with a Rich progress bar."""
@@ -626,7 +627,7 @@ class ExtractionOrchestrator:
             for step_name, step_fn in steps:
                 progress.update(task, description=f"[cyan]{step_name}[/cyan]")
                 try:
-                    step_fn()  # type: ignore[operator]
+                    step_fn()
                 except Exception as exc:
                     log.warning("Extraction step failed", step=step_name, error=str(exc))
                     result.failed_plugins.append(step_name)
@@ -635,14 +636,14 @@ class ExtractionOrchestrator:
 
     def _run_without_progress(
         self,
-        steps: list[tuple[str, object]],
+        steps: Sequence[tuple[str, Callable[[], None]]],
         result: ExtractionResult,
     ) -> None:
         """Run all extraction steps without progress bar (for tests/CI)."""
         for step_name, step_fn in steps:
             log.info("Running extraction step", step=step_name)
             try:
-                step_fn()  # type: ignore[operator]
+                step_fn()
             except Exception as exc:
                 log.warning("Extraction step failed", step=step_name, error=str(exc))
                 result.failed_plugins.append(step_name)

@@ -34,9 +34,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from forensiq.config.settings import get_settings
+from forensiq.detectors.base import DetectorResult
 from forensiq.extraction.orchestrator import ExtractionOrchestrator, ExtractionResult
 from forensiq.features.engineer import FeatureEngineer
 from forensiq.ml.classifier import ForensiqClassifier
@@ -45,6 +46,7 @@ from forensiq.models.features import ProcessFeatureVector
 from forensiq.models.report import (
     DumpMetadata,
     ForensiqReport,
+    YARAResult,
 )
 from forensiq.pipeline.dump_context import DumpContext
 from forensiq.pipeline.timeline import build_timeline
@@ -54,6 +56,9 @@ from forensiq.utils.exceptions import (
     ClassificationError,
 )
 from forensiq.utils.logger import bind_analysis_context, get_logger, set_phase
+
+if TYPE_CHECKING:
+    from forensiq.yara.dll_scanner import YARADLLHit
 
 log = get_logger(__name__)
 
@@ -70,7 +75,7 @@ _LINUX_HEURISTIC_SCORE: dict[str, float] = {
 
 def _apply_linux_heuristic_scores(
     vectors: list[ProcessFeatureVector],
-    detector_findings: list,
+    detector_findings: list[DetectorResult],
     threshold: float = 0.65,
 ) -> list[ProcessFeatureVector]:
     """Assign heuristic threat scores to Linux process vectors from detector findings.
@@ -338,7 +343,7 @@ class AnalysisPipeline:
             # When no local AI model is available this gracefully disables the
             # AI features and the pipeline continues with a basic report.
             llm_client, resolved_model = await self._resolve_ollama_client()
-            yara_results: list = []
+            yara_results: list[YARAResult] = []
             if self._generate_yara and self._settings.YARA_GENERATE:
                 set_phase("yara_generation")
                 yara_results = await self._run_yara_generation(
@@ -350,7 +355,7 @@ class AnalysisPipeline:
             # Scan injected memory regions against built-in YARA rules.
             # This is a fast, offline scan (no Ollama required).
             set_phase("dll_yara_scan")
-            dll_yara_hits: list = []
+            dll_yara_hits: list[YARADLLHit] = []
             try:
                 from forensiq.yara.dll_scanner import YARADLLScanner
 
@@ -594,11 +599,11 @@ class AnalysisPipeline:
                 f"(detail: {exc})"
             )
 
-        exc = getattr(self, "_extraction_exception", None)
-        if exc is not None:
+        extraction_error = getattr(self, "_extraction_exception", None)
+        if extraction_error is not None:
             return (
                 "Extraction failed — Volatility 3 could not analyze this memory dump. "
-                f"Executable: {vol_path}. Detail: {exc}"
+                f"Executable: {vol_path}. Detail: {extraction_error}"
             )
         return "Extraction failed — check Volatility 3 installation"
 
@@ -763,7 +768,7 @@ class AnalysisPipeline:
         extraction: ExtractionResult,
         llm_client: Any | None,
         resolved_model: str | None,
-    ) -> list:
+    ) -> list[YARAResult]:
         """Generate YARA rules for malicious processes via Ollama.
 
         Returns empty list if Ollama is unavailable or no model resolved
@@ -860,7 +865,7 @@ class AnalysisPipeline:
         extraction: ExtractionResult,
         vectors: list[ProcessFeatureVector],
         ctx: DumpContext,
-    ) -> list:
+    ) -> list[DetectorResult]:
         """Run all registered detector plugins.
 
         Windows-only detectors (psscan, svcscan, handles) are excluded
@@ -909,13 +914,16 @@ class AnalysisPipeline:
         """
         from forensiq.reporting.executive import ExecutiveReportGenerator
 
-        generator = ExecutiveReportGenerator(client=llm_client)
         if llm_client is None or resolved_model is None:
             log.info(
                 "Ollama not available — using rule-based executive summary",
                 url=self._settings.OLLAMA_BASE_URL,
             )
-            return generator._build_fallback_summary(report)
+            return ExecutiveReportGenerator(
+                client=cast(Any, llm_client)
+            )._build_fallback_summary(report)
+
+        generator = ExecutiveReportGenerator(client=cast(Any, llm_client))
 
         try:
             summary = await generator.generate(report)
@@ -930,8 +938,8 @@ class AnalysisPipeline:
     async def _persist_to_database(
         self,
         report: ForensiqReport,
-        detector_findings: list,
-        yara_results: list,
+        detector_findings: list[DetectorResult],
+        yara_results: list[YARAResult],
     ) -> None:
         """Persist analysis results to SQLite database (non-fatal).
 

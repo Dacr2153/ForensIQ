@@ -182,7 +182,7 @@ class FeatureEngineer:
                 ]
                 if dll_names:
                     total = len(dll_names)
-                    freq = {}
+                    freq: dict[str, int] = {}
                     for n in dll_names:
                         freq[n] = freq.get(n, 0) + 1
                     f_import_entropy = -sum(

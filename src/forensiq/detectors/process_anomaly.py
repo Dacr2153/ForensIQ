@@ -210,7 +210,7 @@ class ProcessAnomalyDetector(BaseDetector):
         Note: compromised system binaries (e.g., backdoored curl/bash) are handled
         separately by _check_linux_compromised_binary().
         """
-        results = []
+        results: list[DetectorResult] = []
 
         # JIT-capable processes (V8, JVM, Mesa, etc.) always have anonymous RWX pages
         # as a side-effect of dynamic code generation. No amount of corroboration from
@@ -336,7 +336,7 @@ class ProcessAnomalyDetector(BaseDetector):
             T1554   — Compromise Host Software Binary
             T1574.006 — Hijack Execution Flow: LD_PRELOAD
         """
-        results = []
+        results: list[DetectorResult] = []
 
         # Only applies to system-path processes (non-system paths already caught by RWX)
         if not v.is_system_path:
@@ -437,7 +437,7 @@ class ProcessAnomalyDetector(BaseDetector):
             v: Feature vector for the process.
             extraction: Full extraction result to access actual DLL path data.
         """
-        results = []
+        results: list[DetectorResult] = []
         if v.suspicious_dll_count == 0:
             return results
 
@@ -550,7 +550,7 @@ class ProcessAnomalyDetector(BaseDetector):
         reduce false positives on processes the ML model was not optimally
         trained for.
         """
-        results = []
+        results: list[DetectorResult] = []
         proc_lower = v.name.lower()
         adaptive_threshold = ADAPTIVE_THRESHOLDS.get(proc_lower, 0.65)
 
@@ -614,7 +614,7 @@ class ProcessAnomalyDetector(BaseDetector):
         pid_to_name: dict[int, str],
     ) -> list[DetectorResult]:
         """Check that process is spawned by a valid parent."""
-        results = []
+        results: list[DetectorResult] = []
         proc_lower = v.name.lower()
 
         if proc_lower not in VALID_PARENT_MAP:
@@ -657,7 +657,7 @@ class ProcessAnomalyDetector(BaseDetector):
         v: ProcessFeatureVector,
     ) -> list[DetectorResult]:
         """Check that system-only processes run from System32."""
-        results = []
+        results: list[DetectorResult] = []
         proc_lower = v.name.lower()
 
         if proc_lower not in SYSTEM_ONLY_PROCESSES:
