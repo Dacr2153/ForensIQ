@@ -1,17 +1,18 @@
 # FILE: src/forensiq/yara/generator.py
 """YARA rule generation and validation for suspicious processes.
 
-Generates YARA rules using a local Ollama LLM (auto-detected model).
-ALL generated rules are validated with yara-python before being marked valid.
-Invalid rules are recorded but never exported as working detections.
+Generates YARA rules programmatically from extracted IOCs (deterministic,
+guaranteed-valid syntax) and uses a local Ollama LLM only to enrich the
+rule's description field. ALL generated rules are validated with yara-python
+before being marked valid. Invalid rules are recorded but never exported as
+working detections.
 
 Pipeline for each suspicious process:
     1. Extract IOCs (process name, malfind hex, suspicious DLL names, cmdline fragments)
-    2. Build Jinja2 prompt from IOCs
-    3. Send prompt to Ollama → get rule text
-    4. Parse YARA block from response
-    5. Compile with yara-python → mark valid/invalid
-    6. Return YARAResult
+    2. Build a YARA rule programmatically from those IOCs
+    3. Ask Ollama for a one-sentence description (fallback if unavailable)
+    4. Compile with yara-python → mark valid/invalid
+    5. Return YARAResult
 
 Usage:
     from forensiq.yara.generator import YARAGenerator
@@ -31,14 +32,9 @@ import unicodedata
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from jinja2 import Environment, StrictUndefined
-
 from forensiq.llm.ollama_client import OllamaClient
 from forensiq.models.features import ProcessFeatureVector
 from forensiq.models.report import YARAResult
-from forensiq.utils.exceptions import (
-    YARAGenerationError,
-)
 from forensiq.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -47,52 +43,6 @@ if TYPE_CHECKING:
     from forensiq.extraction.orchestrator import ExtractionResult
 
 log = get_logger(__name__)
-
-# ─── YARA Rule Generation Prompt Template ─────────────────────────────────────
-_YARA_PROMPT_TEMPLATE = """\
-You are an expert malware analyst. Generate a single valid YARA rule.
-
-CRITICAL SYNTAX RULES:
-- Rule header: rule RULENAME {     (no colon between name and brace)
-- meta values: strings use "quotes", integers use plain numbers (NO decimals like 1.0 or 0.65)
-- strings section: $s1 = "value" or $s1 = { HH HH HH }
-- condition: any of them or $s1
-- Windows paths in strings: escape backslash as \\\\ or use forward slash
-
-EXACT FORMAT TO FOLLOW:
-rule forensiq_example_1234 {
-    meta:
-        author = "ForensIQ"
-        description = "Suspicious process detected"
-        date = "2026-01-01"
-        threat_level = 3
-    strings:
-        $name = "example.exe" nocase
-        $path = "\\\\Windows\\\\System32" nocase
-    condition:
-        any of them
-}
-
-Now generate a rule for this process:
-Process name: {{ process_name }}
-Rule name (use EXACTLY this): {{ rule_name }}
-Threat score (integer 1-10): {{ threat_score_int }}
-
-IOCs:
-{% for ioc in iocs %}
-- {{ ioc }}
-{% endfor %}
-
-Output ONLY the YARA rule, starting with 'rule {{ rule_name }} {'. No explanations.
-No markdown. No code fences.
-"""
-
-# ─── YARA Block Parser ────────────────────────────────────────────────────────
-# Matches a complete YARA rule block
-_YARA_RULE_PATTERN = re.compile(
-    r"rule\s+\w+\s*(?::\s*[\w\s]+)?\{.*?\}",
-    re.DOTALL,
-)
 
 
 def _sanitize_rule_name(name: str, pid: int) -> str:
@@ -182,73 +132,6 @@ def _extract_iocs(
     return iocs if iocs else [f"Suspicious process: {vector.name} (PID {vector.pid})"]
 
 
-def _parse_yara_block(llm_response: str) -> str:
-    """Extract a valid YARA rule block from an LLM response.
-
-    LLMs sometimes add preamble text or markdown fencing around the rule.
-    This function extracts just the rule definition.
-
-    Args:
-        llm_response: Raw text output from Ollama.
-
-    Returns:
-        Extracted YARA rule text.
-
-    Raises:
-        YARAGenerationError: If no valid YARA rule block can be found.
-    """
-    if not llm_response.strip():
-        raise YARAGenerationError(
-            process_name="unknown",
-            reason="LLM returned empty response",
-        )
-
-    # Remove markdown code fences
-    clean = re.sub(r"```(?:yara|yaml|)?\s*\n?", "", llm_response)
-    clean = re.sub(r"```\s*$", "", clean, flags=re.MULTILINE).strip()
-
-    # Find a YARA rule block
-    match = _YARA_RULE_PATTERN.search(clean)
-    if match:
-        return match.group(0).strip()
-
-    # If pattern didn't match but "rule " is in response, return cleaned text
-    if "rule " in clean.lower() and "{" in clean and "}" in clean:
-        # Try to extract from first "rule" to last "}"
-        start = clean.lower().index("rule ")
-        end = clean.rfind("}") + 1
-        if end > start:
-            return clean[start:end].strip()
-
-    raise YARAGenerationError(
-        process_name="unknown",
-        reason=f"No valid YARA rule found in LLM response (preview: {llm_response[:200]})",
-    )
-
-
-def _fix_common_yara_errors(rule_text: str) -> str:
-    """Auto-fix common Mistral YARA generation mistakes.
-
-    Args:
-        rule_text: Raw YARA rule text from LLM.
-
-    Returns:
-        Fixed rule text.
-    """
-    # Fix: floating point numbers in meta (e.g. threat_level = 0.65 → threat_level = 6)
-    rule_text = re.sub(
-        r"(=\s*)(\d+)\.(\d+)",
-        lambda m: m.group(1) + str(int(float(m.group(2) + "." + m.group(3)) * 10)),
-        rule_text,
-    )
-    # Fix: rule name followed by colon before brace (rule name: { → rule name {)
-    rule_text = re.sub(r"(rule\s+\w+)\s*:\s*\{", r"\1 {", rule_text)
-    # Fix: bare backslashes in string literals (not already doubled)
-    # Only inside quoted strings: replace single \ not followed by another \ or "
-    rule_text = re.sub(r'(?<!")(\\)(?![\\"])', r"\\\\", rule_text)
-    return rule_text
-
-
 def _validate_yara_rule(rule_text: str, rule_name: str) -> tuple[bool, str]:
     """Compile and validate a YARA rule using yara-python.
 
@@ -298,8 +181,8 @@ def _build_yara_rule_programmatic(
     strings_lines: list[str] = []
     idx = 0
 
-    # Always include process name
-    name_safe = vector.name.replace('"', '\\"')
+    # Always include process name (escape both quotes and backslashes)
+    name_safe = vector.name.replace("\\", "\\\\").replace('"', '\\"')
     strings_lines.append(f'        $proc_{idx} = "{name_safe}" nocase')
     idx += 1
 
@@ -325,13 +208,14 @@ def _build_yara_rule_programmatic(
             # Use only the filename portion — avoids backslash escaping issues
             dll_name = dll_path.replace("\\", "/").split("/")[-1]
             if dll_name and dll_name not in ("", ".", ".."):
-                dll_safe = dll_name.replace('"', '\\"')
+                dll_safe = dll_name.replace("\\", "\\\\").replace('"', '\\"')
                 strings_lines.append(f'        $dll_{idx} = "{dll_safe}" nocase')
                 idx += 1
 
         elif ioc.startswith("Network connection:"):
             conn_str = ioc.split(": ", 1)[1]
-            ip = conn_str.split(":")[0].strip()
+            # rsplit handles both "host:port" and bracketed IPv6 "[::1]:443"
+            ip = conn_str.rsplit(":", 1)[0].strip().strip("[]")
             if ip and ip not in ("*", "0.0.0.0", "::") and not ip.startswith("127."):  # noqa: S104
                 strings_lines.append(f'        $net_{idx} = "{ip}"')
                 idx += 1
@@ -341,18 +225,20 @@ def _build_yara_rule_programmatic(
             # Use only the executable part (first token, no paths)
             token = cmdline.replace("\\", "/").split("/")[-1].split()[0][:50]
             if token and token.isascii():
-                token_safe = token.replace('"', '\\"')
+                token_safe = token.replace("\\", "\\\\").replace('"', '\\"')
                 strings_lines.append(f'        $cmd_{idx} = "{token_safe}" nocase')
                 idx += 1
 
     # Guard: always at least one string
     if not strings_lines:
-        name_safe = vector.name.replace('"', '\\"')
+        name_safe = vector.name.replace("\\", "\\\\").replace('"', '\\"')
         strings_lines.append(f'        $proc_0 = "{name_safe}" nocase')
 
     date_str = datetime.now(tz=UTC).strftime("%Y-%m-%d")
     threat_int = max(1, min(10, int(vector.threat_score * 10)))
-    desc_safe = description.replace('"', "'").replace("\n", " ")[:200]
+    desc_safe = (
+        description.replace("\\", "\\\\").replace('"', "'").replace("\n", " ")[:200]
+    )
 
     strings_block = "\n".join(strings_lines)
     return (
@@ -371,56 +257,17 @@ def _build_yara_rule_programmatic(
 
 
 class YARAGenerator:
-    """Generates and validates YARA rules for suspicious processes using Ollama LLM.
+    """Generates and validates YARA rules for suspicious processes.
+
+    Rules are built programmatically from extracted IOCs (guaranteed-valid
+    syntax); a local Ollama LLM is used only to enrich the description.
 
     Args:
         client: OllamaClient instance (creates default if None).
-        max_concurrent: Maximum concurrent LLM requests (default 1, sequential).
     """
 
-    def __init__(
-        self,
-        client: OllamaClient | None = None,
-        max_concurrent: int = 1,
-    ) -> None:
+    def __init__(self, client: OllamaClient | None = None) -> None:
         self._client = client or OllamaClient()
-        self._max_concurrent = max_concurrent
-        self._jinja_env = Environment(
-            undefined=StrictUndefined,
-            # autoescape is intentionally disabled: this template renders plain-text
-            # LLM prompts, not HTML.  Enabling autoescape would corrupt process names
-            # containing '<', '>', '&' (e.g. "<unknown>", "cmd.exe &start").
-            # IOC values are sanitised before rendering in _build_prompt().
-            autoescape=False,  # noqa: S701
-        )
-        self._prompt_template = self._jinja_env.from_string(_YARA_PROMPT_TEMPLATE)
-
-    def _build_prompt(
-        self,
-        vector: ProcessFeatureVector,
-        iocs: list[str],
-        rule_name: str,
-    ) -> str:
-        """Build the YARA generation prompt for a process.
-
-        Args:
-            vector: Feature vector for the target process.
-            iocs: List of IOC strings.
-            rule_name: Sanitized YARA rule name.
-
-        Returns:
-            Complete formatted prompt string.
-        """
-        # Sanitize IOCs: escape backslashes so they are safe in YARA strings
-        safe_iocs = [ioc.replace("\\", "\\\\") for ioc in iocs]
-        return self._prompt_template.render(
-            process_name=vector.name,
-            pid=vector.pid,
-            threat_score=f"{vector.threat_score:.1%}",
-            threat_score_int=max(1, min(10, int(vector.threat_score * 10))),
-            iocs=safe_iocs,
-            rule_name=rule_name,
-        )
 
     async def _generate_single(
         self,

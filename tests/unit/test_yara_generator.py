@@ -5,10 +5,9 @@ from __future__ import annotations
 
 import pytest
 
-from forensiq.utils.exceptions import YARAGenerationError
 from forensiq.yara.generator import (
-    _fix_common_yara_errors,
-    _parse_yara_block,
+    _build_yara_rule_programmatic,
+    _extract_iocs,
     _sanitize_rule_name,
     _validate_yara_rule,
 )
@@ -57,101 +56,64 @@ class TestSanitizeRuleName:
         assert result.endswith("_7777")
 
 
-# ── _parse_yara_block ─────────────────────────────────────────────────────────
+# ── _build_yara_rule_programmatic ─────────────────────────────────────────────
 
 
-class TestParseYaraBlock:
-    def test_clean_rule_extracted(self):
-        rule = """rule forensiq_evil_1234 {
-    meta:
-        author = "test"
-    strings:
-        $s1 = "evil"
-    condition:
-        any of them
-}"""
-        result = _parse_yara_block(rule)
-        assert "forensiq_evil_1234" in result
-        assert "condition" in result
+class TestBuildYaraRuleProgrammatic:
+    def test_valid_rule_compiles(self):
+        try:
+            import yara  # noqa: F401
+        except ImportError:
+            pytest.skip("yara-python not installed")
 
-    def test_markdown_fence_stripped(self):
-        rule = """```yara
-rule forensiq_test_1 {
-    strings:
-        $s = "test"
-    condition:
-        $s
-}
-```"""
-        result = _parse_yara_block(rule)
-        assert "forensiq_test_1" in result
-        assert "```" not in result
-
-    def test_preamble_stripped(self):
-        rule = """Here is the YARA rule:
-
-rule forensiq_test_2 {
-    strings:
-        $a = "hack"
-    condition:
-        $a
-}"""
-        result = _parse_yara_block(rule)
-        assert result.startswith("rule ")
-
-    def test_empty_response_raises(self):
-        with pytest.raises(YARAGenerationError):
-            _parse_yara_block("")
-
-    def test_whitespace_only_raises(self):
-        with pytest.raises(YARAGenerationError):
-            _parse_yara_block("   \n\t  ")
-
-    def test_no_rule_block_raises(self):
-        with pytest.raises(YARAGenerationError):
-            _parse_yara_block("This response has no YARA rule at all.")
-
-    def test_generic_code_block_fence_stripped(self):
-        rule = """```
-rule forensiq_test_3 {
-    strings:
-        $x = "x"
-    condition:
-        $x
-}
-```"""
-        result = _parse_yara_block(rule)
-        assert "forensiq_test_3" in result
-
-
-# ── _fix_common_yara_errors ───────────────────────────────────────────────────
-
-
-class TestFixCommonYaraErrors:
-    def test_float_in_meta_converted(self):
-        text = 'threat_level = 0.65'
-        result = _fix_common_yara_errors(text)
-        # 0.65 * 10 = 6
-        assert "0.65" not in result
-        assert "6" in result
-
-    def test_colon_after_rule_name_removed(self):
-        text = "rule forensiq_evil_1 : {"
-        result = _fix_common_yara_errors(text)
-        assert "rule forensiq_evil_1 {" in result
-
-    def test_no_change_when_already_correct(self):
-        text = (
-            "rule forensiq_test_1 {\n"
-            "    strings:\n"
-            '        $s = "ok"\n'
-            "    condition:\n"
-            "        $s\n"
-            "}"
+        vector = _make_vector(name="evil.exe", threat_score=0.9)
+        rule_text = _build_yara_rule_programmatic(
+            "forensiq_evil_1234", vector, ["Process name: evil.exe"], "test desc"
         )
-        result = _fix_common_yara_errors(text)
-        # Should not break anything already correct
-        assert "rule forensiq_test_1 {" in result
+        is_valid, err = _validate_yara_rule(rule_text, "forensiq_evil_1234")
+        assert is_valid is True, err
+
+    def test_escapes_backslash_in_strings_and_meta(self):
+        try:
+            import yara  # noqa: F401
+        except ImportError:
+            pytest.skip("yara-python not installed")
+
+        vector = _make_vector(name="evil.exe", threat_score=0.9)
+        vector.suspicious_dll_paths = []
+        rule_text = _build_yara_rule_programmatic(
+            "forensiq_bs_1",
+            vector,
+            [
+                "Suspicious DLL: C:\\Windows\\Temp\\evil.dll",
+                "Network connection: [::1]:443 (ESTABLISHED)",
+            ],
+            "C:\\temp\\desc",
+        )
+        # YARA string literals must not contain raw backslashes or unescaped quotes
+        assert 'description = "C:\\\\temp\\\\desc"' in rule_text
+        is_valid, err = _validate_yara_rule(rule_text, "forensiq_bs_1")
+        assert is_valid is True, err
+
+    def test_ipv6_bracketed_host_extracted(self):
+        """An IPv6 IOC '[::1]:443' must yield the host '::1', not '[' or ''."""
+        vector = _make_vector(name="evil.exe", threat_score=0.9)
+        rule_text = _build_yara_rule_programmatic(
+            "forensiq_ipv6_1",
+            vector,
+            ["Network connection: [::1]:443 (ESTABLISHED)"],
+            "test desc",
+        )
+        assert '$net_1 = "::1"' in rule_text
+
+
+def _make_vector(name: str = "evil.exe", threat_score: float = 0.9):
+    from unittest.mock import MagicMock
+
+    v = MagicMock()
+    v.name = name
+    v.threat_score = threat_score
+    return v
 
 
 # ── _validate_yara_rule ───────────────────────────────────────────────────────
@@ -193,3 +155,34 @@ class TestValidateYaraRule:
     def test_whitespace_rule_returns_false(self):
         is_valid, _err = _validate_yara_rule("   \n  ", "blank")
         assert is_valid is False
+
+
+# ── _extract_iocs ─────────────────────────────────────────────────────────────
+
+
+class TestExtractIOCs:
+    """Tests for _extract_iocs."""
+
+    def test_iocs_not_empty(self, malicious_vector, sample_extraction) -> None:
+        iocs = _extract_iocs(malicious_vector, sample_extraction)
+        assert len(iocs) > 0
+
+    def test_process_name_in_iocs(self, malicious_vector, sample_extraction) -> None:
+        iocs = _extract_iocs(malicious_vector, sample_extraction)
+        assert any("payload.exe" in ioc for ioc in iocs)
+
+    def test_malfind_hex_in_iocs(self, malicious_vector, sample_extraction) -> None:
+        iocs = _extract_iocs(malicious_vector, sample_extraction)
+        assert any("Memory bytes" in ioc or "4d5a" in ioc.lower() for ioc in iocs)
+
+    def test_suspicious_dll_in_iocs(self, malicious_vector, sample_extraction) -> None:
+        iocs = _extract_iocs(malicious_vector, sample_extraction)
+        assert any("malicious.dll" in ioc or "Temp" in ioc for ioc in iocs)
+
+    def test_external_connection_in_iocs(self, malicious_vector, sample_extraction) -> None:
+        iocs = _extract_iocs(malicious_vector, sample_extraction)
+        assert any("185.220.101.45" in ioc for ioc in iocs)
+
+    def test_clean_process_has_minimal_iocs(self, clean_vector, sample_extraction) -> None:
+        iocs = _extract_iocs(clean_vector, sample_extraction)
+        assert len(iocs) >= 1

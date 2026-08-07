@@ -7,41 +7,58 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from forensiq.utils.hexdump import hexdump_to_bytes
 from forensiq.yara.dll_scanner import YARADLLHit, YARADLLScanner
 
-# ── _decode_hexdump (static) ──────────────────────────────────────────────────
+# ── hexdump_to_bytes (shared) ─────────────────────────────────────────────────
 
 
 class TestDecodeHexdump:
     def test_empty_string_returns_empty_bytes(self):
-        assert YARADLLScanner._decode_hexdump("") == b""
+        assert hexdump_to_bytes("") == b""
 
     def test_none_like_empty(self):
-        assert YARADLLScanner._decode_hexdump("") == b""
+        assert hexdump_to_bytes("") == b""
 
     def test_plain_hex_decoded(self):
-        result = YARADLLScanner._decode_hexdump("4d5a")
+        result = hexdump_to_bytes("4d5a")
         assert result == b"\x4d\x5a"
 
     def test_spaced_hex_decoded(self):
-        result = YARADLLScanner._decode_hexdump("4d 5a 90 00")
+        result = hexdump_to_bytes("4d 5a 90 00")
         assert result == b"\x4d\x5a\x90\x00"
 
     def test_mixed_whitespace(self):
-        result = YARADLLScanner._decode_hexdump("4d5a 9000\n0300 0000")
+        result = hexdump_to_bytes("4d5a 9000\n0300 0000")
         assert result == b"\x4d\x5a\x90\x00\x03\x00\x00\x00"
 
-    def test_odd_length_truncated(self):
-        # 5 hex chars — last nibble dropped
-        result = YARADLLScanner._decode_hexdump("4d5a9")
-        assert result == b"\x4d\x5a"
+    def test_odd_length_token_dropped(self):
+        # A ragged odd-length token is not a valid byte group → ignored
+        result = hexdump_to_bytes("4d5a9")
+        assert result == b""
 
     def test_non_hex_chars_ignored(self):
-        result = YARADLLScanner._decode_hexdump("4d-5a")
-        assert result == b"\x4d\x5a"
+        # A token containing non-hex separators is not a valid byte group
+        result = hexdump_to_bytes("4d-5a")
+        assert result == b""
 
     def test_single_char_returns_empty(self):
-        assert YARADLLScanner._decode_hexdump("4") == b""
+        assert hexdump_to_bytes("4") == b""
+
+    def test_address_and_ascii_columns_stripped(self):
+        # Full Volatility malfind line: offset column, byte groups, ASCII column
+        line = (
+            "0xfffff80411234567  4d 5a 90 00 03 00 00 00  "
+            "ff ff 00 00 b8 00 00 00  MZ.............."
+        )
+        result = hexdump_to_bytes(line)
+        assert result == bytes.fromhex("4d5a900003000000ffff0000b8000000")
+
+    def test_compact_groups_with_ascii_column(self):
+        # Compact 4-char groups with a trailing ASCII render column
+        line = "0x1 4d5a 9000 0300  0000 ffff  MZ.."
+        result = hexdump_to_bytes(line)
+        assert result == bytes.fromhex("4d5a900003000000ffff")
 
 
 # ── YARADLLScanner.is_ready ───────────────────────────────────────────────────
@@ -83,7 +100,7 @@ class TestScanExtraction:
 
     def test_returns_empty_when_not_ready(self):
         scanner = YARADLLScanner()
-        scanner._compiled = None  # force not-ready
+        scanner._compiled_rules = []  # force not-ready
         extraction = self._make_extraction({})
         result = scanner.scan_extraction(extraction)
         assert result == []

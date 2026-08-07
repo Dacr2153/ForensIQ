@@ -23,11 +23,11 @@ Usage:
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from forensiq.utils.hexdump import hexdump_to_bytes
 from forensiq.utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -185,43 +185,68 @@ class YARADLLScanner:
         Args:
             extra_rules_dir: Optional directory of additional .yar/.yara files
                              to compile alongside the built-in rules. Rules are
-                             combined into a single compiled rule set.
+                             compiled per-file so a syntax error in one file
+                             never disables the rest of the scanner.
         """
-        self._compiled: Any | None = None
-        self._rule_meta: dict[str, dict[str, str]] = {}
+        self._compiled_rules: list[Any] = []
 
         try:
             import yara
-
-            sources: dict[str, str] = {"builtin": _BUILTIN_RULES_SOURCE}
-
-            # Load extra .yar/.yara files from directory
-            if extra_rules_dir and extra_rules_dir.is_dir():
-                for yar_file in sorted(extra_rules_dir.glob("*.yar")) + sorted(
-                    extra_rules_dir.glob("*.yara")
-                ):
-                    try:
-                        sources[yar_file.stem] = yar_file.read_text(encoding="utf-8")
-                        log.debug("Loaded extra YARA rule file", path=str(yar_file))
-                    except OSError as exc:
-                        log.warning("Failed to read YARA file", path=str(yar_file), error=str(exc))
-
-            self._compiled = yara.compile(sources=sources)
-            log.info(
-                "YARADLLScanner compiled",
-                sources=list(sources.keys()),
-                extra_dir=str(extra_rules_dir) if extra_rules_dir else None,
-            )
-
         except ImportError:
             log.warning("yara-python not installed — DLL YARA scanning disabled")
+            return
+
+        self._compile_source(yara, "builtin", _BUILTIN_RULES_SOURCE, "<builtin>")
+
+        if extra_rules_dir and extra_rules_dir.is_dir():
+            for yar_file in sorted(extra_rules_dir.glob("*.yar")) + sorted(
+                extra_rules_dir.glob("*.yara")
+            ):
+                try:
+                    source = yar_file.read_text(encoding="utf-8")
+                except OSError as exc:
+                    log.warning(
+                        "Failed to read YARA file", path=str(yar_file), error=str(exc)
+                    )
+                    continue
+                self._compile_source(yara, yar_file.stem, source, str(yar_file))
+
+        log.info(
+            "YARADLLScanner compiled",
+            rule_sets=len(self._compiled_rules),
+            extra_dir=str(extra_rules_dir) if extra_rules_dir else None,
+        )
+
+    def _compile_source(
+        self,
+        yara: Any,
+        name: str,
+        source: str,
+        display_path: str,
+    ) -> None:
+        """Compile one rule source in isolation.
+
+        A syntax error in this source is logged and does not abort the scanner —
+        the rest of the rule sets remain usable.
+        """
+        try:
+            compiled = yara.compile(source=source)
         except Exception as exc:
-            log.error("Failed to compile YARA rules", error=str(exc))
+            log.warning(
+                "Skipping YARA source with compile error",
+                name=name,
+                path=display_path,
+                error=str(exc),
+            )
+            return
+        if compiled:
+            self._compiled_rules.append(compiled)
+            log.debug("Compiled YARA source", name=name, path=display_path)
 
     @property
     def is_ready(self) -> bool:
-        """True if YARA rules compiled successfully and scanner is operational."""
-        return self._compiled is not None
+        """True if at least one YARA rule set compiled successfully."""
+        return len(self._compiled_rules) > 0
 
     def scan_extraction(
         self,
@@ -263,7 +288,7 @@ class YARADLLScanner:
                     proc_name = proc.name
 
             for region in regions:
-                raw_bytes = self._decode_hexdump(region.hexdump)
+                raw_bytes = hexdump_to_bytes(region.hexdump)
                 if not raw_bytes:
                     continue
 
@@ -290,17 +315,21 @@ class YARADLLScanner:
         return hits
 
     def _scan_bytes(self, data: bytes) -> list[tuple[str, str, str, list[str]]]:
-        """Scan raw bytes against compiled YARA rules.
+        """Scan raw bytes against all compiled YARA rule sets.
 
         Returns:
             List of (rule_name, description, severity, matched_strings).
         """
-        if not self.is_ready or self._compiled is None:
+        if not self.is_ready:
             return []
 
         results: list[tuple[str, str, str, list[str]]] = []
-        try:
-            matches = self._compiled.match(data=data)
+        for compiled in self._compiled_rules:
+            try:
+                matches = compiled.match(data=data)
+            except Exception as exc:
+                log.debug("YARA scan error (non-fatal)", error=str(exc))
+                continue
             for match in matches:
                 meta = match.meta or {}
                 description = str(meta.get("description", ""))
@@ -313,35 +342,5 @@ class YARADLLScanner:
                     elif isinstance(m, (list, tuple)) and len(m) >= 2:
                         match_strs.append(str(m[1]))
                 results.append((match.rule, description, severity, match_strs))
-        except Exception as exc:
-            log.debug("YARA scan error (non-fatal)", error=str(exc))
 
         return results
-
-    @staticmethod
-    def _decode_hexdump(hexdump: str) -> bytes:
-        """Decode a Volatility-style hexdump string to raw bytes.
-
-        Volatility's hexdump format:
-            4d5a 9000 0300 0000 ffff 0000 b800 0000
-        Multiple lines are concatenated. Non-hex characters are ignored.
-
-        Args:
-            hexdump: Hex string from MalfindRegion.hexdump.
-
-        Returns:
-            Raw bytes decoded from the hex string. Empty bytes on failure.
-        """
-        if not hexdump:
-            return b""
-        # Remove all whitespace, then decode pairs
-        hex_only = re.sub(r"[^0-9a-fA-F]", "", hexdump)
-        if len(hex_only) < 2:
-            return b""
-        # Ensure even length
-        if len(hex_only) % 2:
-            hex_only = hex_only[:-1]
-        try:
-            return bytes.fromhex(hex_only)
-        except ValueError:
-            return b""
