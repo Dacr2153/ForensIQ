@@ -22,16 +22,6 @@ from forensiq.utils.logger import get_logger
 
 log = get_logger(__name__)
 
-# Standard Windows service binary directories (safe paths)
-_SAFE_SERVICE_PATHS = (
-    "\\windows\\system32\\",
-    "\\windows\\syswow64\\",
-    "\\windows\\system\\",
-    "\\windows\\winsxs\\",
-    "\\program files\\",
-    "\\program files (x86)\\",
-)
-
 # Service binary path fragments that indicate suspicious location
 _SUSPICIOUS_SERVICE_PATHS = (
     "\\temp\\",
@@ -44,9 +34,6 @@ _SUSPICIOUS_SERVICE_PATHS = (
     "\\recycler",
     "$recycle.bin",
 )
-
-# Service types (numeric codes from Volatility)
-_DRIVER_SERVICE_TYPES = {1, 2}  # SERVICE_KERNEL_DRIVER, SERVICE_FILE_SYSTEM_DRIVER
 
 
 @dataclass

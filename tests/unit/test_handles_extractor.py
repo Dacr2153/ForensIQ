@@ -30,9 +30,12 @@ class TestHandleEntryProperties:
         entry = self._make_handle("Mutant", "Global\\gh0st_main")
         assert entry.is_suspicious_mutex is True
 
-    def test_mutex_with_global_pattern_is_suspicious(self):
+    def test_mutex_with_global_prefix_not_suspicious(self):
+        # A bare "Global\" prefix is used by every Windows mutex (Global\\gh0st
+        # style names are common for legitimate apps) — only known malware
+        # mutex patterns should be flagged, not the prefix alone.
         entry = self._make_handle("Mutex", "Global\\anysuffix")
-        assert entry.is_suspicious_mutex is True
+        assert entry.is_suspicious_mutex is False
 
     def test_clean_mutex_not_suspicious(self):
         entry = self._make_handle("Mutant", "Local\\MyAppMutex")

@@ -176,9 +176,9 @@ class TestDLLContentHasher:
         target.write_bytes(b"payload")
         entry = _make_entry(r"\Temp\evil.dll")
         hasher = DLLContentHasher(dll_root=root)
-        result = hasher.hash_iterable([entry])
-        assert len(result) == 1
-        assert len(result[0].content_sha256) == 64
+        result = hasher.hash_dlls({entry.pid: [entry]})
+        assert len(result[entry.pid]) == 1
+        assert len(result[entry.pid][0].content_sha256) == 64
 
     def test_live_linux_absolute_path(self, tmp_path: Path) -> None:
         lib = tmp_path / "libevil.so.1"

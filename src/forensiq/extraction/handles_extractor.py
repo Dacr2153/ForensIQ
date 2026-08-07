@@ -21,9 +21,10 @@ from forensiq.utils.logger import get_logger
 
 log = get_logger(__name__)
 
-# Known malware mutex names (partial matches, case-insensitive)
+# Known malware mutex names (partial matches, case-insensitive).
+# NOTE: "\Global\" is deliberately NOT included — it is the default namespace
+# for Windows mutexes, so matching it would flag every legitimate mutex.
 _MALWARE_MUTEX_PATTERNS = [
-    "global\\",  # Global namespace mutex (common in malware)
     "_singleinstance",
     "yui93jfksd",  # Example known RAT mutexes
     "zbot",

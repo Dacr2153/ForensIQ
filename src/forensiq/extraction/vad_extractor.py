@@ -40,6 +40,10 @@ _FILE_COLS = ("MappedFile", "mapped_file", "Filename", "File", "File Path")
 _HEXDUMP_COLS = ("Hexdump", "hexdump", "Hex", "Bytes")
 _DISASM_COLS = ("Disasm", "disasm", "Disassembly", "Assembly")
 
+# Kernel-managed VMA pseudo-files that are expected and benign — never treat
+# these as suspicious even though they appear "anonymous" in /proc/PID/maps.
+_KERNEL_PSEUDO_FILES = frozenset({"[vdso]", "[vvar]", "[vsyscall]", "[heap]", "[stack]"})
+
 
 def _parse_addr(val: Any) -> int:
     """Parse a memory address (hex or int) from Volatility output."""
@@ -96,7 +100,11 @@ class VADExtractor:
                         continue
                     start_hex, end_hex, perms, path = m.groups()
                     path = (path or "").strip()
-                    # Anonymous: no file path, or special pseudo-files like [heap]/[stack]
+                    # Anonymous: no file path, or special pseudo-files like [heap]/[stack].
+                    # Exclude kernel-managed pseudo-files ([vdso] etc.) — they are
+                    # expected and must not be flagged as injected code.
+                    if path in _KERNEL_PSEUDO_FILES:
+                        continue
                     is_anon = not path or path.startswith("[")
                     is_rwx = "r" in perms and "w" in perms and "x" in perms
                     if is_anon and is_rwx:

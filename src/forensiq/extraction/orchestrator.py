@@ -1,10 +1,9 @@
 # FILE: src/forensiq/extraction/orchestrator.py
-"""Extraction orchestrator: runs all Volatility 3 plugins sequentially.
+"""Extraction orchestrator: runs all Volatility 3 plugins against a memory dump.
 
-Volatility 3 is NOT thread-safe when running multiple plugins against
-the same dump file simultaneously. All plugins must be run sequentially.
+Each plugin is an independent OS subprocess, so plugins are dispatched with
+asyncio.gather and run concurrently. The orchestrator:
 
-The orchestrator:
     1. Validates the dump file exists and is readable
     2. Runs all plugins with Rich progress bar
     3. Continues past plugin failures (fault-tolerant)
@@ -25,15 +24,13 @@ Usage:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
-from collections.abc import Callable, Sequence
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from rich.console import Console
-from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
 
 from forensiq.acquisition.volatility_runner import VolatilityRunner
 from forensiq.config.settings import get_settings
@@ -109,11 +106,13 @@ class ExtractionOrchestrator:
     """Runs all Volatility 3 extraction plugins against a memory dump.
 
     Design:
-        - run()          : Sequential execution (safe, original behavior)
-        - run_parallel() : Parallel execution via ThreadPoolExecutor
-                           pslist runs first (required), then netscan/dlllist/malfind
-                           run in parallel, then vadinfo runs selectively for
-                           only suspicious PIDs (those with malfind hits).
+        - run()          : Thin sync wrapper — runs the async pipeline via
+                           asyncio.run. Each plugin is an independent OS
+                           subprocess, so they run concurrently.
+        - run_async()    : The one canonical implementation. pslist runs first
+                           (required), then netscan/dlllist/malfind run
+                           concurrently, then vadinfo runs selectively for only
+                           suspicious PIDs (those with malfind hits).
         - Fault-tolerant: individual plugin failures are logged but don't abort
         - Rich progress bar for interactive use
         - Returns ExtractionResult with all artifacts and failure metadata
@@ -122,7 +121,6 @@ class ExtractionOrchestrator:
         dump_path: Path to the Windows memory dump file to analyze.
         compute_hash: Whether to compute SHA-256 of the dump (slow for large files).
         show_progress: Whether to show Rich progress bar (disable for tests/CI).
-        parallel: Whether to use parallel execution (default: True).
         max_vad_pids: Max PIDs for selective VAD (0 = all PIDs with malfind hits).
     """
 
@@ -131,7 +129,6 @@ class ExtractionOrchestrator:
         dump_path: Path,
         compute_hash: bool = True,
         show_progress: bool = True,
-        parallel: bool = True,
         max_vad_pids: int = 0,
         is_linux: bool | None = None,
         precomputed_sha256: str = "",
@@ -139,7 +136,6 @@ class ExtractionOrchestrator:
         self.dump_path = dump_path.resolve()
         self.compute_hash = compute_hash
         self.show_progress = show_progress
-        self.parallel = parallel
         self.max_vad_pids = max_vad_pids
         self.precomputed_sha256 = precomputed_sha256
         self._settings = get_settings()
@@ -172,7 +168,7 @@ class ExtractionOrchestrator:
                 message=f"Path is not a file: {self.dump_path}",
                 context={"dump_path": str(self.dump_path)},
             )
-        if self.dump_path.stat().st_size == 0:
+        if self.dump_path.stat().st_size == 0 and self.dump_path != Path("/proc/kcore"):
             raise AcquisitionError(
                 message=f"Memory dump file is empty: {self.dump_path}",
                 context={"dump_path": str(self.dump_path)},
@@ -181,8 +177,8 @@ class ExtractionOrchestrator:
     def run(self) -> ExtractionResult:
         """Run all extraction plugins and return a combined result.
 
-        Delegates to run_parallel() if self.parallel=True (default),
-        otherwise runs sequentially (original behavior).
+        Thin synchronous wrapper around :meth:`run_async` — plugins run as
+        independent OS subprocesses dispatched with ``asyncio.gather``.
 
         Returns:
             ExtractionResult with all available artifacts.
@@ -190,9 +186,7 @@ class ExtractionOrchestrator:
         Raises:
             AcquisitionError: If the dump file is invalid or unreadable.
         """
-        if self.parallel:
-            return self.run_parallel()
-        return self._run_sequential()
+        return asyncio.run(self.run_async())
 
     async def run_async(self) -> ExtractionResult:
         """Run all extraction plugins using asyncio.gather for true concurrency.
@@ -212,8 +206,6 @@ class ExtractionOrchestrator:
         Raises:
             AcquisitionError: If dump is invalid or pslist returns nothing.
         """
-        import asyncio
-
         self._validate_dump()
         dump_size = self.dump_path.stat().st_size
         log.info(
@@ -231,11 +223,10 @@ class ExtractionOrchestrator:
         runner = VolatilityRunner(dump_path=self.dump_path, is_linux=self.is_linux)
         result.volatility_version = runner.get_volatility_version()
 
-        # ── Stage 1: SHA-256 (thread pool) + pslist+cmdline (asyncio) ────────
+        # ── Stage 1: SHA-256 (thread) + pslist+cmdline (asyncio) ─────────────
         if self.show_progress:
             _console.print("[cyan]Stage 1/3:[/cyan] Hash + process list (async, parallel)...")
 
-        loop = asyncio.get_event_loop()
         process_extractor = ProcessExtractor(runner)
 
         if self.compute_hash:
@@ -245,7 +236,7 @@ class ExtractionOrchestrator:
                 sha256 = self.precomputed_sha256
                 process_tree = await process_extractor.extract_async()
             else:
-                hash_task = loop.run_in_executor(None, _compute_sha256, self.dump_path)
+                hash_task = asyncio.to_thread(_compute_sha256, self.dump_path)
                 processes_task = process_extractor.extract_async()
                 try:
                     sha256, process_tree = await asyncio.gather(hash_task, processes_task)
@@ -329,140 +320,6 @@ class ExtractionOrchestrator:
         self._log_completion(result)
         return result
 
-    def run_parallel(self) -> ExtractionResult:
-        """Run extraction plugins in parallel using ThreadPoolExecutor.
-
-        Execution order:
-            Stage 1 (parallel): SHA-256 + pslist  [blocking: required first]
-            Stage 2 (parallel): netscan + dlllist + malfind  [independent]
-            Stage 3 (selective): vadinfo for PIDs with malfind hits only
-
-        Each plugin is a separate subprocess, so parallel execution is safe.
-        The dump file is opened read-only by each subprocess independently.
-
-        Returns:
-            ExtractionResult with all artifacts.
-        """
-        self._validate_dump()
-        dump_size = self.dump_path.stat().st_size
-        log.info(
-            "Starting parallel extraction",
-            dump=self.dump_path.name,
-            size_mb=round(dump_size / (1024 * 1024), 1),
-        )
-
-        result = ExtractionResult(
-            dump_path=self.dump_path,
-            dump_size_bytes=dump_size,
-            is_linux=self.is_linux,
-        )
-
-        runner = VolatilityRunner(dump_path=self.dump_path, is_linux=self.is_linux)
-        result.volatility_version = runner.get_volatility_version()
-
-        # ── Stage 1: SHA-256 + processes (required before anything else) ─────
-        def _hash() -> None:
-            if self.compute_hash:
-                result.dump_sha256 = self.precomputed_sha256 or _compute_sha256(
-                    self.dump_path
-                )
-
-        def _processes() -> None:
-            extractor = ProcessExtractor(
-                VolatilityRunner(dump_path=self.dump_path, is_linux=self.is_linux)
-            )
-            result.process_tree = extractor.extract()
-
-        if self.show_progress:
-            _console.print("[cyan]Stage 1/3:[/cyan] Computing hash + process list...")
-
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            futures = {
-                pool.submit(_hash): "sha256",
-                pool.submit(_processes): "processes",
-            }
-            for future in as_completed(futures):
-                step_name = futures[future]
-                try:
-                    future.result()
-                except Exception as exc:
-                    log.warning("Stage 1 step failed", step=step_name, error=str(exc))
-                    result.failed_plugins.append(step_name)
-
-        if result.process_tree is None:
-            raise AcquisitionError(
-                message=(
-                    f"Process extraction failed — cannot continue analysis of"
-                    f" {self.dump_path.name}"
-                ),
-                context={"dump_path": str(self.dump_path), "failed": result.failed_plugins},
-            )
-
-        # ── Stage 2: netscan + dlllist + malfind (parallel, independent) ─────
-        def _network() -> None:
-            extractor = NetworkExtractor(
-                VolatilityRunner(dump_path=self.dump_path, is_linux=self.is_linux)
-            )
-            result.connections = extractor.extract()
-
-        def _dlls() -> None:
-            extractor = DLLExtractor(
-                VolatilityRunner(dump_path=self.dump_path, is_linux=self.is_linux)
-            )
-            result.dlls = extractor.extract()
-
-        def _malfind() -> None:
-            extractor = VADExtractor(
-                VolatilityRunner(dump_path=self.dump_path, is_linux=self.is_linux)
-            )
-            result.malfind = extractor.extract_malfind()
-
-        if self.show_progress:
-            _console.print(
-                "[cyan]Stage 2/3:[/cyan] Extracting network, DLLs, malfind (parallel)..."
-            )
-
-        with ThreadPoolExecutor(max_workers=3) as pool:
-            futures = {
-                pool.submit(_network): "netscan",
-                pool.submit(_dlls): "dlllist",
-                pool.submit(_malfind): "malfind",
-            }
-            for future in as_completed(futures):
-                step_name = futures[future]
-                try:
-                    future.result()
-                except Exception as exc:
-                    log.warning("Stage 2 step failed", step=step_name, error=str(exc))
-                    result.failed_plugins.append(step_name)
-
-        # ── Stage 3: vadinfo (selective — only suspicious PIDs) ───────────────
-        # Only run vadinfo for PIDs that have malfind hits or suspicious DLLs.
-        # This is the slowest plugin and produces the most data — being selective
-        # reduces runtime by 60-80% on typical dumps.
-        suspicious_pids = self._get_suspicious_pids(result)
-
-        if suspicious_pids:
-            if self.show_progress:
-                _console.print(
-                    f"[cyan]Stage 3/3:[/cyan] VAD analysis for {len(suspicious_pids)} "
-                    f"suspicious PID(s) (selective)..."
-                )
-            try:
-                extractor = VADExtractor(
-                    VolatilityRunner(dump_path=self.dump_path, is_linux=self.is_linux)
-                )
-                # Extract VAD only for suspicious PIDs
-                result.vads = extractor.extract_vad_for_pids(suspicious_pids)
-            except Exception as exc:
-                log.warning("Selective VAD extraction failed", error=str(exc))
-                result.failed_plugins.append("vadinfo_selective")
-        else:
-            log.info("No suspicious PIDs found — skipping VAD extraction")
-
-        self._log_completion(result)
-        return result
-
     def _get_suspicious_pids(self, result: ExtractionResult) -> set[int]:
         """Return PIDs that warrant VAD analysis.
 
@@ -495,11 +352,21 @@ class ExtractionOrchestrator:
             total_suspicious=len(suspicious),
         )
 
-        # Cap at max_vad_pids if set
+        # Cap at max_vad_pids if set.
         if self.max_vad_pids > 0 and len(suspicious) > self.max_vad_pids:
-            # Prioritize malfind PIDs if we need to cap
-            prioritized = list(result.malfind.keys())[: self.max_vad_pids]
-            return set(prioritized)
+            # Prioritize malfind PIDs, then fill the remaining slots with
+            # suspicious-DLL PIDs — never throw the DLL-only PIDs away when the
+            # malfind set is smaller than the cap.
+            prioritized = list(result.malfind.keys())
+            remaining = self.max_vad_pids - len(prioritized)
+            if remaining > 0:
+                dll_pids = [
+                    pid
+                    for pid, dlls in result.dlls.items()
+                    if pid not in prioritized and any(dll.is_suspicious for dll in dlls)
+                ]
+                prioritized.extend(dll_pids[:remaining])
+            return set(prioritized[: self.max_vad_pids])
 
         return suspicious
 
@@ -530,120 +397,3 @@ class ExtractionOrchestrator:
             malfind_hits=sum(len(v) for v in result.malfind.values()),
             failed_plugins=result.failed_plugins,
         )
-
-    def _run_sequential(self) -> ExtractionResult:
-        """Run all extraction steps sequentially (original behavior).
-
-        Plugins are run in this order:
-            1. Process list (pslist + cmdline) — required
-            2. Network connections (netscan) — optional
-            3. DLL list (dlllist) — optional
-            4. VAD info (vadinfo) — optional, slowest
-            5. Malfind (malfind) — optional
-
-        Returns:
-            ExtractionResult with all available artifacts.
-
-        Raises:
-            AcquisitionError: If the dump file is invalid or unreadable.
-        """
-        self._validate_dump()
-
-        dump_size = self.dump_path.stat().st_size
-        log.info(
-            "Starting sequential extraction",
-            dump=self.dump_path.name,
-            size_mb=round(dump_size / (1024 * 1024), 1),
-        )
-
-        result = ExtractionResult(
-            dump_path=self.dump_path,
-            dump_size_bytes=dump_size,
-            is_linux=self.is_linux,
-        )
-
-        runner = VolatilityRunner(dump_path=self.dump_path, is_linux=self.is_linux)
-        result.volatility_version = runner.get_volatility_version()
-
-        def run_processes() -> None:
-            extractor = ProcessExtractor(runner)
-            result.process_tree = extractor.extract()
-
-        def run_network() -> None:
-            extractor = NetworkExtractor(runner)
-            result.connections = extractor.extract()
-
-        def run_dlls() -> None:
-            extractor = DLLExtractor(runner)
-            result.dlls = extractor.extract()
-
-        def run_vads() -> None:
-            extractor = VADExtractor(runner)
-            result.vads = extractor.extract_vad()
-
-        def run_malfind() -> None:
-            extractor = VADExtractor(runner)
-            result.malfind = extractor.extract_malfind()
-
-        def run_hash() -> None:
-            if self.compute_hash:
-                log.info("Computing SHA-256 digest", dump=self.dump_path.name)
-                result.dump_sha256 = self.precomputed_sha256 or _compute_sha256(
-                    self.dump_path
-                )
-
-        steps = [
-            ("Computing SHA-256", run_hash),
-            ("Extracting processes (pslist + cmdline)", run_processes),
-            ("Extracting network connections (netscan)", run_network),
-            ("Extracting DLL lists (dlllist)", run_dlls),
-            ("Extracting VAD entries (vadinfo)", run_vads),
-            ("Extracting malfind regions (malfind)", run_malfind),
-        ]
-
-        if self.show_progress:
-            self._run_with_progress(steps, result)
-        else:
-            self._run_without_progress(steps, result)
-
-        self._log_completion(result)
-        return result
-
-    def _run_with_progress(
-        self,
-        steps: Sequence[tuple[str, Callable[[], None]]],
-        result: ExtractionResult,
-    ) -> None:
-        """Run all extraction steps with a Rich progress bar."""
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TaskProgressColumn(),
-            console=_console,
-            transient=False,
-        ) as progress:
-            task = progress.add_task("Extracting...", total=len(steps))
-            for step_name, step_fn in steps:
-                progress.update(task, description=f"[cyan]{step_name}[/cyan]")
-                try:
-                    step_fn()
-                except Exception as exc:
-                    log.warning("Extraction step failed", step=step_name, error=str(exc))
-                    result.failed_plugins.append(step_name)
-                finally:
-                    progress.advance(task)
-
-    def _run_without_progress(
-        self,
-        steps: Sequence[tuple[str, Callable[[], None]]],
-        result: ExtractionResult,
-    ) -> None:
-        """Run all extraction steps without progress bar (for tests/CI)."""
-        for step_name, step_fn in steps:
-            log.info("Running extraction step", step=step_name)
-            try:
-                step_fn()
-            except Exception as exc:
-                log.warning("Extraction step failed", step=step_name, error=str(exc))
-                result.failed_plugins.append(step_name)

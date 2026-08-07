@@ -29,7 +29,7 @@ from __future__ import annotations
 import hashlib
 import ntpath
 import re
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 
 from forensiq.models.artifact import DLLEntry
@@ -44,7 +44,7 @@ _MAX_HASH_BYTES = 256 * 1024 * 1024  # 256 MB
 # Device path prefixes to strip after normalizing to forward slashes, e.g.
 # "/Device/HarddiskVolume1/", "/Volume{...}/", "/??/C:/".
 _DEVICE_PREFIX_RE = re.compile(
-    r"^(?:/device/[^/]+/|/volume[^/]*/|/\\\?\\)?",
+    r"^(?:/device/[^/]+/|/volume[^/]*/|/\?\?/)",
     re.IGNORECASE,
 )
 # Windows drive letter prefix, e.g. "C:/".
@@ -92,6 +92,18 @@ def _sha256_file(path: Path) -> str:
         return ""
 
 
+def _is_within_root(candidate: Path, root: Path) -> bool:
+    """Return True if ``candidate`` resolves strictly inside ``root``.
+
+    Guards against ``..`` traversal and symlink escapes: a crafted dump must
+    never be able to name an arbitrary host file for hashing.
+    """
+    try:
+        return candidate.resolve().is_relative_to(root.resolve())
+    except (OSError, RuntimeError):
+        return False
+
+
 def _resolve_dll_file(
     full_dll_name: str,
     dll_root: Path | None,
@@ -102,7 +114,8 @@ def _resolve_dll_file(
     Args:
         full_dll_name: The DLL path as reported by Volatility.
         dll_root: Optional root directory (FORENSIQ_DLL_ROOT). When set, the
-            normalized path is resolved under it.
+            normalized path is resolved under it. Candidates are rejected
+            unless they resolve strictly inside the root (path-traversal safe).
         exists: Predicate used to test candidates (injectable for tests).
 
     Returns:
@@ -112,18 +125,23 @@ def _resolve_dll_file(
         return None
 
     if dll_root is not None:
+        root = dll_root.resolve()
         rel = _normalize_dll_path(full_dll_name)
         if not rel:
             return None
-        candidate = dll_root / PurePosixPath(rel)
-        if exists(candidate):
+        candidate = root / PurePosixPath(rel)
+        if _is_within_root(candidate, root) and exists(candidate):
             return candidate
-        # Fall back to the raw basename under the root (matches by filename)
+        # Fall back to the raw basename under the root (matches by filename).
+        # Only accept the basename match when it is unambiguous — otherwise
+        # hashing the wrong file would feed a misleading hash to threat-intel.
         base = ntpath.basename(full_dll_name.replace("\\", "/"))
         if base:
-            by_name = dll_root / base
-            if exists(by_name):
-                return by_name
+            matches = [
+                p for p in root.rglob(base) if _is_within_root(p, root)
+            ]
+            if len(matches) == 1 and exists(matches[0]):
+                return matches[0]
         return None
 
     # No DLL_ROOT: treat as an absolute path on this host (live Linux).
@@ -217,35 +235,6 @@ class DLLContentHasher:
                 root=str(self._dll_root) if self._dll_root else "none",
             )
         return result
-
-    def hash_iterable(
-        self,
-        entries: Iterable[DLLEntry],
-    ) -> list[DLLEntry]:
-        """Hash an iterable of DLL entries without PID grouping.
-
-        Convenience wrapper used by pipeline stages that operate on flat
-        collections of DLLs.
-
-        Args:
-            entries: Any iterable of DLLEntry objects.
-
-        Returns:
-            A list of updated DLLEntry objects.
-        """
-        grouped: dict[int, list[DLLEntry]] = {}
-        for entry in entries:
-            grouped.setdefault(entry.pid, []).append(entry)
-        updated = self.hash_dlls(grouped)
-        return [entry for entries in updated.values() for entry in entries]
-
-    # Public alias for discoverability; delegates to hash_dlls.
-    def hash_entries(
-        self,
-        dlls_by_pid: dict[int, list[DLLEntry]],
-    ) -> dict[int, list[DLLEntry]]:
-        """Alias of :meth:`hash_dlls`."""
-        return self.hash_dlls(dlls_by_pid)
 
 
 __all__ = [

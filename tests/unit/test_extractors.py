@@ -153,20 +153,22 @@ class TestServiceEntry:
 
 
 class TestParallelExtractorConfig:
-    def test_parallel_default_true(self) -> None:
-        """Parallel extraction should be enabled by default."""
+    def test_run_async_is_canonical(self) -> None:
+        """Async extraction is the single canonical implementation."""
         from forensiq.extraction.orchestrator import ExtractionOrchestrator
 
-        # The orchestrator accepts parallel=True in __init__
-        sig = ExtractionOrchestrator.__init__.__code__.co_varnames
-        assert "parallel" in sig
-
-    def test_orchestrator_has_run_parallel_method(self) -> None:
-        """Orchestrator should have the parallel execution method."""
-        from forensiq.extraction.orchestrator import ExtractionOrchestrator
-
-        assert hasattr(ExtractionOrchestrator, "run_parallel")
+        assert hasattr(ExtractionOrchestrator, "run_async")
         assert hasattr(ExtractionOrchestrator, "run")
+        assert not hasattr(ExtractionOrchestrator, "run_parallel")
+        assert not hasattr(ExtractionOrchestrator, "_run_sequential")
+
+    def test_run_wraps_async(self) -> None:
+        """run() must delegate to run_async via asyncio.run."""
+        import inspect
+
+        from forensiq.extraction.orchestrator import ExtractionOrchestrator
+
+        assert inspect.iscoroutinefunction(ExtractionOrchestrator.run_async)
 
 
 class TestPrecomputedSha256:

@@ -330,13 +330,7 @@ class ProcessExtractor:
         while queue:
             pid, depth = queue.popleft()
             if pid in nodes:
-                # Rebuild node with correct depth (Pydantic models are immutable by default)
-                old_node = nodes[pid]
-                nodes[pid] = ProcessNode(
-                    artifact=old_node.artifact,
-                    children=old_node.children,
-                    depth=depth,
-                )
+                nodes[pid].depth = depth
                 for child in nodes[pid].children:
                     queue.append((child.artifact.pid, depth + 1))
 
