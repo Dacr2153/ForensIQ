@@ -86,7 +86,6 @@ class STIXExporter:
 
             # Path-based indicator
             if vec.name:
-                _safe_path = _safe_stix(vec.name).replace("\\", "\\\\")
                 patterns.append(f"[file:name = '{_safe_stix(name)}']")
 
             # Network connections for this PID from dll_yara_hits
@@ -131,7 +130,7 @@ class STIXExporter:
         technique_pids_by_id: dict[str, list[int]] = {}
         for tech in report.mitre_techniques:
             tech_id = tech.get("technique_id", "")
-            tech_name = tech.get("technique_name", tech_id)
+            tech_name = tech.get("name", tech.get("technique_name", tech_id))
             if not tech_id or tech_id in attack_pattern_by_id:
                 continue
 

@@ -29,6 +29,7 @@ from markupsafe import Markup
 
 from forensiq.models.report import ForensiqReport
 from forensiq.utils.exceptions import ReportError
+from forensiq.utils.filename import safe_filename
 from forensiq.utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -68,7 +69,10 @@ class ReportBuilder:
         try:
             self._env = Environment(
                 loader=PackageLoader("forensiq", "reporting/templates"),
-                autoescape=select_autoescape(["html", "xml"]),
+                # NOTE: the template is "report.html.j2" — a suffix-based
+                # select_autoescape(["html", "xml"]) would NOT match ".j2", so
+                # autoescaping must be enabled for every template by default.
+                autoescape=select_autoescape(default=True),
                 trim_blocks=True,
                 lstrip_blocks=True,
             )
@@ -79,7 +83,7 @@ class ReportBuilder:
             templates_dir = Path(__file__).parent / "templates"
             self._env = Environment(
                 loader=FileSystemLoader(str(templates_dir)),
-                autoescape=select_autoescape(["html", "xml"]),
+                autoescape=select_autoescape(default=True),
                 trim_blocks=True,
                 lstrip_blocks=True,
             )
@@ -112,10 +116,7 @@ class ReportBuilder:
             Filename like 'forensiq_memory_20240115_103045.html'.
         """
         dump_stem = Path(report.metadata.dump_path).stem
-        # Sanitize: remove non-alphanumeric characters except hyphen and underscore
-        import re
-
-        safe_stem = re.sub(r"[^a-zA-Z0-9_-]", "_", dump_stem)[:50]
+        safe_stem = safe_filename(dump_stem)
         timestamp = report.metadata.analysis_start.strftime("%Y%m%d_%H%M%S")
         return f"forensiq_{safe_stem}_{timestamp}.html"
 

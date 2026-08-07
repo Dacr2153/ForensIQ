@@ -650,7 +650,7 @@
         {% endif %}
       </div>
       {% if rule.rule_text %}
-      <pre class="yara-code" id="yara-{{ loop.index }}">{{ rule.rule_text | e }}</pre>
+      <pre class="yara-code" id="yara-{{ loop.index }}">{{ rule.rule_text }}</pre>
       {% endif %}
     </div>
     {% endfor %}
