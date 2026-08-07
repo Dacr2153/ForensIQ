@@ -39,8 +39,11 @@ _MAX_RESPONSE_BYTES = 65536  # 64 KB is plenty for a single YARA rule
 # Ollama base URL must be http(s) with a host, never a bare path or file scheme.
 _URL_PATTERN = re.compile(r"^https?://[^\s/$.?#].[^\s]*$", re.IGNORECASE)
 
-# Number of times to retry transient connection errors before giving up.
+# Number of times to retry transient failures before giving up.
+# A failure is transient when it is a connection/read error (httpx.RequestError)
+# or a 5xx / 429 server response. Other statuses are not retried.
 _MAX_RETRIES = 3
+_BASE_BACKOFF_SECONDS = 1.0
 
 # Model families to prefer (in order) when the configured model is not
 # installed.  Matching is a case-insensitive prefix match against the full
@@ -86,36 +89,96 @@ class OllamaClient:
         self.model = model or settings.OLLAMA_MODEL
         self.timeout = timeout or settings.OLLAMA_TIMEOUT
 
+        # Single shared transport — reused across every request instead of
+        # opening a new connection pool per call. Lazily created on first use
+        # and closed via aclose()/close().
+        self._client: httpx.AsyncClient | None = None
+
+        # Prompts contain analysis data (rule text, file hashes, artifact names).
+        # Only allow plaintext HTTP for loopback — warn loudly for remote hosts.
+        hostname = parsed.hostname.lower()
+        is_loopback = hostname in {"localhost", "::1"} or hostname.startswith("127.")
+        if parsed.scheme == "http" and not is_loopback:
+            log.warning(
+                "Ollama reachable over plaintext HTTP on a non-loopback host — "
+                "prompts containing analysis data will be sent unencrypted",
+                url=raw_url,
+            )
+
+    def _get_client(self) -> httpx.AsyncClient:
+        """Return the shared httpx client, creating it on first use."""
+        if self._client is None:
+            self._client = httpx.AsyncClient(timeout=float(self.timeout))
+        return self._client
+
+    async def aclose(self) -> None:
+        """Close the shared httpx client and release its connection pool."""
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
+
+    def close(self) -> None:
+        """Synchronously close the shared httpx client (best-effort)."""
+        if self._client is not None:
+            try:
+                self._client.close()
+            finally:
+                self._client = None
+
+    async def _get_tags(self) -> list[str]:
+        """Fetch installed model tags from ``/api/tags`` with transient retries.
+
+        Raises:
+            OllamaConnectionError: If Ollama is unreachable or keeps failing.
+        """
+        url = f"{self.base_url}/api/tags"
+        last_error: Exception | None = None
+        for attempt in range(1, _MAX_RETRIES + 1):
+            try:
+                response = await self._get_client().get(url)
+                if response.status_code < 500 and response.status_code != 429:
+                    response.raise_for_status()
+                    data = response.json()
+                    return [
+                        name
+                        for name in (
+                            m.get("name", "") for m in data.get("models", [])
+                        )
+                        if name
+                    ]
+                last_error = httpx.HTTPStatusError(
+                    f"HTTP {response.status_code}",
+                    request=response.request,
+                    response=response,
+                )
+            except (httpx.RequestError, httpx.HTTPStatusError) as exc:
+                last_error = exc
+            if attempt < _MAX_RETRIES:
+                await asyncio.sleep(_BASE_BACKOFF_SECONDS * (2 ** (attempt - 1)))
+        raise OllamaConnectionError(base_url=self.base_url) from last_error
+
     async def check_health(self) -> None:
         """Verify Ollama is running and the configured model is available.
 
         Raises:
             OllamaConnectionError: If Ollama is not reachable at base_url.
-            OllamaModelNotFoundError: If the configured model is not installed.
+            OllamaModelNotFoundError: If the configured model is not installed,
+                or Ollama reports no models at all.
         """
-        url = f"{self.base_url}/api/tags"
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(url)
-                response.raise_for_status()
-                data = response.json()
-        except httpx.ConnectError as exc:
-            raise OllamaConnectionError(base_url=self.base_url) from exc
-        except httpx.TimeoutException as exc:
-            raise OllamaConnectionError(
-                base_url=self.base_url,
-            ) from exc
-        except httpx.HTTPStatusError as exc:
-            raise OllamaConnectionError(base_url=self.base_url) from exc
+        available_models = await self._get_tags()
+
+        # An Ollama instance with zero models is unhealthy for our purposes:
+        # there is nothing to generate with, and model resolution would fail.
+        if not available_models:
+            raise OllamaModelNotFoundError(model=self.model)
 
         # Check if our model is available
-        available_models = [m.get("name", "") for m in data.get("models", [])]
         model_available = any(
             self.model in name or name.startswith(self.model.split(":")[0])
             for name in available_models
         )
 
-        if not model_available and available_models:
+        if not model_available:
             log.warning(
                 "Configured model not found in Ollama",
                 model=self.model,
@@ -135,20 +198,7 @@ class OllamaClient:
         Raises:
             OllamaConnectionError: If Ollama is not reachable at base_url.
         """
-        url = f"{self.base_url}/api/tags"
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(url)
-                response.raise_for_status()
-                data = response.json()
-        except httpx.ConnectError as exc:
-            raise OllamaConnectionError(base_url=self.base_url) from exc
-        except httpx.TimeoutException as exc:
-            raise OllamaConnectionError(base_url=self.base_url) from exc
-        except httpx.HTTPStatusError as exc:
-            raise OllamaConnectionError(base_url=self.base_url) from exc
-
-        return [name for name in (m.get("name", "") for m in data.get("models", [])) if name]
+        return await self._get_tags()
 
     async def resolve_model(self) -> str | None:
         """Pick a usable model, preferring the configured one.
@@ -246,26 +296,39 @@ class OllamaClient:
 
         log.debug("Sending generation request to Ollama", model=self.model)
 
-        # Retry transient connection/timeout failures with a short backoff.
+        # Retry transient failures (connection/read/timeout errors and 5xx/429
+        # responses) with exponential backoff.
+        response: httpx.Response | None = None
+        last_error: Exception | None = None
         for attempt in range(1, _MAX_RETRIES + 1):
             try:
-                async with httpx.AsyncClient(timeout=float(self.timeout)) as client:
-                    response = await client.post(url, json=payload)
-                break
-            except (httpx.ConnectError, httpx.TimeoutException) as exc:
-                if attempt >= _MAX_RETRIES:
-                    if isinstance(exc, httpx.ConnectError):
-                        raise OllamaConnectionError(base_url=self.base_url) from exc
-                    raise OllamaTimeoutError(
-                        timeout_seconds=self.timeout,
-                        model=self.model,
-                    ) from exc
-                log.warning(
-                    "Ollama request failed, retrying",
-                    attempt=attempt,
-                    max_retries=_MAX_RETRIES,
+                response = await self._get_client().post(url, json=payload)
+                if response.status_code < 500 and response.status_code != 429:
+                    last_error = None
+                    break
+                last_error = httpx.HTTPStatusError(
+                    f"HTTP {response.status_code}",
+                    request=response.request,
+                    response=response,
                 )
-                await asyncio.sleep(attempt * 1.0)
+            except (httpx.RequestError, httpx.HTTPStatusError) as exc:
+                last_error = exc
+            if attempt >= _MAX_RETRIES:
+                break
+            log.warning(
+                "Ollama request failed, retrying",
+                attempt=attempt,
+                max_retries=_MAX_RETRIES,
+            )
+            await asyncio.sleep(_BASE_BACKOFF_SECONDS * (2 ** (attempt - 1)))
+
+        if isinstance(last_error, httpx.TimeoutException):
+            raise OllamaTimeoutError(
+                timeout_seconds=self.timeout,
+                model=self.model,
+            ) from last_error
+        if last_error is not None:
+            raise OllamaConnectionError(base_url=self.base_url) from last_error
 
         try:
             response.raise_for_status()

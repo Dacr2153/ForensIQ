@@ -28,36 +28,28 @@ def _settings_patch():
     )
 
 
-class _AsyncCM:
-    """Async context manager wrapping a fake httpx AsyncClient."""
+def _client_factory(*behaviors):
+    """Return a fake httpx.AsyncClient factory whose get/post use the behaviors.
 
-    def __init__(self, behavior):
-        self._client = AsyncMock()
-        if isinstance(behavior, Exception):
-            self._client.post = AsyncMock(side_effect=behavior)
-            self._client.get = AsyncMock(side_effect=behavior)
-        else:
-            self._client.post = AsyncMock(return_value=behavior)
-            self._client.get = AsyncMock(return_value=behavior)
-
-    async def __aenter__(self):
-        return self._client
-
-    async def __aexit__(self, *exc):
-        return False
-
-
-def _client_factory(*post_behaviors):
-    """Return a fake httpx.AsyncClient class whose post uses the given behaviors.
-
+    The client is created lazily by OllamaClient and reused across requests,
+    so behaviors are consumed per HTTP call (not per client construction).
     Each behavior is either an exception (raised) or an httpx.Response (returned).
     Once the queue is exhausted the last behavior is reused.
     """
-    queue = list(post_behaviors)
+    queue = list(behaviors)
 
-    def _factory(*args, **kwargs):
+    def _behavior(*_args, **_kwargs):
         behavior = queue.pop(0) if len(queue) > 1 else queue[0]
-        return _AsyncCM(behavior)
+        if isinstance(behavior, Exception):
+            raise behavior
+        return behavior
+
+    def _factory(*_args, **_kwargs):
+        client = AsyncMock()
+        client.get = AsyncMock(side_effect=_behavior)
+        client.post = AsyncMock(side_effect=_behavior)
+        client.aclose = AsyncMock()
+        return client
 
     return _factory
 
