@@ -148,7 +148,26 @@ class DiffPipeline:
         before_result, after_result = await asyncio.gather(
             before_orch.run_async(),
             after_orch.run_async(),
+            return_exceptions=True,
         )
+
+        # A failed extraction must surface in the DiffResult, not crash the run.
+        for label, res in (("before", before_result), ("after", after_result)):
+            if isinstance(res, BaseException):
+                log.warning("Diff extraction failed", label=label, error=str(res))
+                return DiffResult(
+                    before_path=before_path,
+                    after_path=after_path,
+                    error=f"Extraction failed ({label}): {res}",
+                    exit_code=2,
+                )
+            if res is None:
+                return DiffResult(
+                    before_path=before_path,
+                    after_path=after_path,
+                    error=f"Extraction produced no result ({label})",
+                    exit_code=2,
+                )
 
         # ── Build diff ────────────────────────────────────────────────────────
         result = DiffResult(

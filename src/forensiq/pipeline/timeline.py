@@ -302,6 +302,19 @@ _SEVERITY_ORDER: dict[str, int] = {
 }
 
 
+def _cap_severity(severity: str, ceiling: str) -> str:
+    """Cap *severity* at the *ceiling* using the canonical severity order.
+
+    Severity rank is smaller for more severe levels (critical=0 … low=3), so
+    *severity* is downgraded to *ceiling* whenever it outranks it. A
+    ``"critical"`` rule on a suspicious-only process (ceiling ``"medium"``) is
+    downgraded to ``"medium"`` — never the other way round.
+    """
+    if _SEVERITY_ORDER.get(severity, 3) < _SEVERITY_ORDER.get(ceiling, 3):
+        return ceiling
+    return severity
+
+
 def build_timeline(
     vectors: list[ProcessFeatureVector],
     is_linux: bool = False,
@@ -341,6 +354,10 @@ def build_timeline(
         for rule in active_rules:
             event = rule.build_event(v, is_linux, baseline_sev, now)
             if event is not None:
+                # Enforce the ceiling on every rule (including custom ones):
+                # a suspicious-only process must never yield a higher-severity
+                # event than its baseline allows.
+                event.severity = _cap_severity(event.severity, baseline_sev)
                 events.append(event)
 
     events.sort(key=lambda e: (_SEVERITY_ORDER.get(e.severity, 4), e.process_name))

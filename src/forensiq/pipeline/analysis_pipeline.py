@@ -31,15 +31,16 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from forensiq.config.settings import get_settings
 from forensiq.detectors.base import DetectorResult
 from forensiq.extraction.orchestrator import ExtractionOrchestrator, ExtractionResult
 from forensiq.features.engineer import FeatureEngineer
+from forensiq.features.heuristics import SUSPICIOUS_THRESHOLD
 from forensiq.ml.classifier import ForensiqClassifier
 from forensiq.ml.explainer import SHAPExplainer
 from forensiq.models.features import ProcessFeatureVector
@@ -49,8 +50,16 @@ from forensiq.models.report import (
     YARAResult,
 )
 from forensiq.pipeline.dump_context import DumpContext
+from forensiq.pipeline.linux_scoring import apply_linux_heuristic_scores
+from forensiq.pipeline.stages import (
+    generate_executive_summary,
+    generate_yara_rules,
+    persist_to_database,
+    run_detectors,
+    write_html_report,
+    write_json_report,
+)
 from forensiq.pipeline.timeline import build_timeline
-from forensiq.reporting.builder import ReportBuilder
 from forensiq.utils.exceptions import (
     AcquisitionError,
     ClassificationError,
@@ -61,74 +70,6 @@ if TYPE_CHECKING:
     from forensiq.yara.dll_scanner import YARADLLHit
 
 log = get_logger(__name__)
-
-# ── Linux heuristic scoring ───────────────────────────────────────────────────
-
-_LINUX_HEURISTIC_SCORE: dict[str, float] = {
-    "critical": 0.85,
-    "high": 0.70,  # Corroborated evidence required to reach HIGH; clear margin above threshold
-    "medium": 0.45,  # Suspicious but below default 0.65 threshold — not marked malicious
-    "low": 0.20,
-    "info": 0.0,
-}
-
-
-def _apply_linux_heuristic_scores(
-    vectors: list[ProcessFeatureVector],
-    detector_findings: list[DetectorResult],
-    threshold: float = 0.65,
-) -> list[ProcessFeatureVector]:
-    """Assign heuristic threat scores to Linux process vectors from detector findings.
-
-    The XGBoost model is trained on Windows memory and cannot be applied to Linux
-    dumps.  Instead, we derive a threat_score from the highest-severity detector
-    finding for each process so that the rest of the pipeline (timeline, top_threats,
-    YARA generation, suspicious_count) can produce meaningful output.
-
-    Score mapping:
-        critical finding → 0.85  (marked malicious well above default 0.65 threshold)
-        high     finding → 0.70  (marked malicious; HIGH requires corroborated evidence)
-        medium   finding → 0.45  (suspicious but NOT malicious at default threshold)
-        low/info finding → 0.20 / 0.0  (informational, not malicious)
-
-    Args:
-        vectors: Per-process feature vectors (threat_score = 0.0 post-classification skip).
-        detector_findings: All DetectorResult objects from the detector phase.
-
-    Returns:
-        Updated vector list with heuristic threat_score and ensemble_score set.
-    """
-    # Build a map: PID → highest heuristic score from detector findings
-    pid_score: dict[int, float] = {}
-    for finding in detector_findings:
-        severity_key = (
-            finding.severity.value if hasattr(finding.severity, "value") else str(finding.severity)
-        )
-        score = _LINUX_HEURISTIC_SCORE.get(severity_key.lower(), 0.0)
-        pid_score[finding.pid] = max(pid_score.get(finding.pid, 0.0), score)
-
-    if not pid_score:
-        return vectors
-
-    updated: list[ProcessFeatureVector] = []
-    for v in vectors:
-        score = pid_score.get(v.pid, 0.0)
-        if score > 0.0:
-            updated.append(
-                v.model_copy(
-                    update={
-                        "threat_score": score,
-                        "ensemble_score": score,
-                        "is_malicious": score >= threshold,
-                    }
-                )
-            )
-        else:
-            updated.append(v)
-
-    # Re-sort by threat_score descending (mirrors classifier behavior)
-    updated.sort(key=lambda x: x.threat_score, reverse=True)
-    return updated
 
 
 @dataclass
@@ -154,6 +95,7 @@ class PipelineResult:
     exit_code: int = 0
     error: str = ""
     degraded_reason: str = ""
+    warnings: list[str] = field(default_factory=list)
 
 
 class AnalysisPipeline:
@@ -200,6 +142,9 @@ class AnalysisPipeline:
         # SHA-256 of the dump computed during the cache pre-check, reused by
         # extraction so the full file is only read once per run.
         self._precomputed_sha256 = ""
+        # Loaded classifier reused across phases — the XGBoost joblib is loaded
+        # exactly once per run (classification + SHAP explanation share it).
+        self._classifier: ForensiqClassifier | None = None
 
     def _emit(self, stage: str, data: Any) -> None:
         """Emit a streaming event to the registered callback (if any)."""
@@ -324,7 +269,7 @@ class AnalysisPipeline:
             # that downstream pipeline stages (timeline, top_threats, suspicious
             # count, YARA) can produce meaningful output.
             if ctx.is_linux and detector_findings:
-                vectors = _apply_linux_heuristic_scores(
+                vectors = apply_linux_heuristic_scores(
                     vectors, detector_findings, threshold=ctx.threshold
                 )
                 log.info(
@@ -402,7 +347,7 @@ class AnalysisPipeline:
 
             malicious_processes = [v for v in vectors if v.is_malicious]
             suspicious_processes = [
-                v for v in vectors if v.threat_score >= 0.35 and not v.is_malicious
+                v for v in vectors if v.threat_score >= SUSPICIOUS_THRESHOLD and not v.is_malicious
             ]
 
             model_info: dict[str, str] = {}
@@ -474,17 +419,30 @@ class AnalysisPipeline:
 
             if self._generate_html:
                 result.report_path = self._write_html_report(report, output_dir)
+                if result.report_path is None:
+                    result.warnings.append("HTML report could not be written")
 
             if self._generate_json:
                 result.json_path = self._write_json_report(report, output_dir)
+                if result.json_path is None:
+                    result.warnings.append("JSON report could not be written")
 
             if yara_results:
-                yara_dir = output_dir / "yara_rules"
-                from forensiq.yara.generator import YARAGenerator
+                try:
+                    yara_dir = output_dir / "yara_rules"
+                    from forensiq.yara.generator import YARAGenerator
 
-                gen = YARAGenerator()
-                gen.export_valid_rules(yara_results, yara_dir)
-                result.yara_dir = yara_dir
+                    gen = YARAGenerator()
+                    written = gen.export_valid_rules(yara_results, yara_dir)
+                    if written:
+                        result.yara_dir = yara_dir
+                    else:
+                        result.warnings.append(
+                            "No valid YARA rules were written (all generated rules invalid)"
+                        )
+                except Exception as exc:
+                    log.error("YARA rule export failed", error=str(exc))
+                    result.warnings.append(f"YARA rule export failed: {exc}")
 
             # ── Final exit code ────────────────────────────────────────────
             # 0=clean, 1=threats found, 2=analysis error, 3=degraded.
@@ -710,6 +668,7 @@ class AnalysisPipeline:
         try:
             classifier.load_model(model_path)
             classified = classifier.predict_batch(vectors)
+            self._classifier = classifier  # reused by SHAP explanation phase
             malicious_count = sum(1 for v in classified if v.is_malicious)
             log.info(
                 "Classification complete",
@@ -747,13 +706,18 @@ class AnalysisPipeline:
         if ctx.is_linux:
             return vectors
 
-        classifier = ForensiqClassifier()
-        classifier.threshold = self._settings.THREAT_THRESHOLD
+        # Reuse the classifier loaded during classification when possible —
+        # avoids deserializing the XGBoost joblib a second time.
+        classifier = self._classifier
+        if classifier is None:
+            classifier = ForensiqClassifier()
+            classifier.threshold = ctx.threshold
         if not self._settings.is_model_available():
             return vectors
 
         try:
-            classifier.load_model(self._settings.get_model_path())
+            if classifier.model is None:
+                classifier.load_model(self._settings.get_model_path())
             explainer = SHAPExplainer(classifier.model)
             explained = explainer.explain_batch(vectors)
             log.info("SHAP explanation complete", vectors=len(explained))
@@ -784,26 +748,13 @@ class AnalysisPipeline:
         Returns:
             List of YARAResult objects.
         """
-        from forensiq.yara.generator import YARAGenerator
-
-        if llm_client is None or resolved_model is None:
-            log.warning(
-                "No usable Ollama model — YARA generation skipped",
-                url=self._settings.OLLAMA_BASE_URL,
-            )
-            return []
-
-        generator = YARAGenerator(client=llm_client)
-        try:
-            results = await generator.generate_for_malicious(
-                vectors=vectors,
-                extraction=extraction,
-                max_rules=10,
-            )
-            return results
-        except Exception as exc:
-            log.error("YARA generation pipeline failed", error=str(exc))
-            return []
+        return await generate_yara_rules(
+            self._settings,
+            vectors,
+            extraction,
+            llm_client,
+            resolved_model,
+        )
 
     def _write_html_report(
         self,
@@ -819,14 +770,7 @@ class AnalysisPipeline:
         Returns:
             Path to the HTML file, or None on failure.
         """
-        try:
-            builder = ReportBuilder()
-            path = builder.render(report, output_dir)
-            log.info("HTML report written", path=str(path))
-            return path
-        except Exception as exc:
-            log.error("HTML report generation failed", error=str(exc))
-            return None
+        return write_html_report(report, output_dir)
 
     def _write_json_report(
         self,
@@ -842,23 +786,7 @@ class AnalysisPipeline:
         Returns:
             Path to the JSON file, or None on failure.
         """
-        try:
-            import re
-            from pathlib import Path as PathType
-
-            dump_stem = PathType(report.metadata.dump_path).stem
-            safe_stem = re.sub(r"[^a-zA-Z0-9_-]", "_", dump_stem)[:50]
-            timestamp = report.metadata.analysis_start.strftime("%Y%m%d_%H%M%S")
-            json_filename = f"forensiq_{safe_stem}_{timestamp}.json"
-            json_path = output_dir / json_filename
-
-            json_content = report.model_dump_json(indent=2)
-            json_path.write_text(json_content, encoding="utf-8")
-            log.info("JSON report written", path=str(json_path))
-            return json_path
-        except Exception as exc:
-            log.error("JSON report generation failed", error=str(exc))
-            return None
+        return write_json_report(report, output_dir)
 
     def _run_detectors(
         self,
@@ -874,23 +802,7 @@ class AnalysisPipeline:
         Returns:
             List of DetectorResult findings.
         """
-        from forensiq.detectors.registry import build_default_registry
-
-        try:
-            registry = build_default_registry(
-                is_linux=ctx.is_linux,
-                vt_api_key=self._settings.VT_API_KEY,
-            )
-            findings = registry.run_all(extraction, vectors)
-            log.info(
-                "Detector plugins complete",
-                detectors=len(registry),
-                findings=len(findings),
-            )
-            return findings
-        except Exception as exc:
-            log.warning("Detector registry failed (non-fatal)", error=str(exc))
-            return []
+        return run_detectors(self._settings, extraction, vectors, ctx)
 
     async def _run_executive_summary(
         self,
@@ -912,28 +824,12 @@ class AnalysisPipeline:
         Returns:
             Executive summary string (never empty).
         """
-        from forensiq.reporting.executive import ExecutiveReportGenerator
-
-        if llm_client is None or resolved_model is None:
-            log.info(
-                "Ollama not available — using rule-based executive summary",
-                url=self._settings.OLLAMA_BASE_URL,
-            )
-            return ExecutiveReportGenerator(
-                client=cast(Any, llm_client)
-            )._build_fallback_summary(report)
-
-        generator = ExecutiveReportGenerator(client=cast(Any, llm_client))
-
-        try:
-            summary = await generator.generate(report)
-        except Exception as exc:
-            log.warning("Executive summary failed", error=str(exc))
-            return generator._build_fallback_summary(report)
-
-        if summary.strip():
-            return summary
-        return generator._build_fallback_summary(report)
+        return await generate_executive_summary(
+            self._settings,
+            report,
+            llm_client,
+            resolved_model,
+        )
 
     async def _persist_to_database(
         self,
@@ -948,26 +844,4 @@ class AnalysisPipeline:
             detector_findings: List of DetectorResult objects.
             yara_results: List of YARAResult objects.
         """
-        from forensiq.db.manager import ForensiqDatabase
-
-        try:
-            async with ForensiqDatabase() as db:
-                analysis_id = await db.save_analysis(
-                    dump_name=report.metadata.dump_filename,
-                    dump_sha256=report.metadata.dump_sha256,
-                    dump_size_bytes=report.metadata.dump_size_bytes,
-                    forensiq_version=report.metadata.forensiq_version,
-                    volatility_version=report.metadata.volatility_version,
-                    total_processes=report.total_processes,
-                    malicious_count=report.malicious_count,
-                    suspicious_count=report.suspicious_count,
-                    timeline_events=len(report.timeline),
-                    yara_rules_count=len(yara_results),
-                )
-                if detector_findings:
-                    await db.save_findings(analysis_id, detector_findings)
-                if yara_results:
-                    await db.save_yara_rules(analysis_id, yara_results)
-                log.info("Analysis persisted to database", analysis_id=analysis_id)
-        except Exception as exc:
-            log.warning("Database persistence failed (non-fatal)", error=str(exc))
+        await persist_to_database(report, detector_findings, yara_results)
