@@ -21,10 +21,12 @@ MITRE ATT&CK:
 
 from __future__ import annotations
 
+import ipaddress
 import re
 from typing import TYPE_CHECKING, Any
 
 from forensiq.detectors.base import BaseDetector, DetectorResult, FindingSeverity
+from forensiq.utils.hexdump import hexdump_to_bytes
 
 if TYPE_CHECKING:
     from forensiq.extraction.orchestrator import ExtractionResult
@@ -59,17 +61,6 @@ _RE_SUSPICIOUS_PATH = re.compile(
     re.IGNORECASE,
 )
 
-# PowerShell encoded command
-_RE_PS_ENCODED = re.compile(
-    r"(?:powershell|pwsh)[^\n]{0,50}(?:-enc|-encodedcommand)",
-    re.IGNORECASE,
-)
-
-# Base64 blocks of ≥32 chars (possible encoded payloads)
-_RE_BASE64 = re.compile(
-    r"[A-Za-z0-9+/]{32,}(?:={0,2})",
-)
-
 # Known DLL injection / reflective loading strings
 _INJECTION_STRINGS = frozenset(
     {
@@ -87,8 +78,27 @@ _INJECTION_STRINGS = frozenset(
     }
 )
 
-# PE header magic in hex representation used by Volatility malfind output
-_MZ_HEX_PATTERN = re.compile(r"\b4d5a(?:90|50|00)", re.IGNORECASE)  # "MZ\x90" or "MZ\x50"
+# Domains that are safe to see in injected regions (Microsoft telemetry etc.).
+# Matching is a host-suffix comparison ("windows.com" must not match
+# "mywindows.com"), so keep this list short and exact.
+_BENIGN_URL_SUFFIXES = (
+    "microsoft.com",
+    "windows.com",
+    "windowsupdate.com",
+    "msftncsi.com",
+    "msecnd.net",
+)
+
+
+def _host_suffix_is_benign(url: str) -> bool:
+    """True if the URL's hostname ends with a known-benign domain.
+
+    Extracts the host from ``http(s)://host[:port]/...`` and compares with an
+    exact suffix boundary so ``evilmicrosoft.com`` is not treated as benign.
+    """
+    m = re.match(r"https?://([^/?#:]+)", url, re.IGNORECASE)
+    host = (m.group(1).lower() if m else url.lower().split("/", 1)[0])
+    return any(host == d or host.endswith("." + d) for d in _BENIGN_URL_SUFFIXES)
 
 
 # ─── Linux IOC Patterns ───────────────────────────────────────────────────────
@@ -161,15 +171,13 @@ class MalfindStringsDetector(BaseDetector):
         # external IPs (GitHub CDN, NTP servers, DNS resolvers) that match _RE_IP.
         # Linux process anomaly detection is handled by ProcessAnomalyDetector.
         if getattr(extraction, "is_linux", False):
-            return self._detect_linux(extraction, vectors)
+            return self._detect_linux(extraction)
 
         if not extraction.malfind:
             return findings
 
         # Map PID → process name from process tree
-        pid_to_name: dict[int, str] = {}
-        if extraction.process_tree:
-            pid_to_name = {pid: proc.name for pid, proc in extraction.process_tree.flat_map.items()}
+        pid_to_name = extraction.process_tree.name_map if extraction.process_tree else {}
 
         for pid, regions in extraction.malfind.items():
             proc_name = pid_to_name.get(pid, "<unknown>")
@@ -192,7 +200,7 @@ class MalfindStringsDetector(BaseDetector):
         disasm = getattr(region, "disassembly", "") or ""
 
         # Convert hex bytes to raw bytes for string extraction
-        raw_bytes = self._hexdump_to_bytes(hexdump)
+        raw_bytes = hexdump_to_bytes(hexdump)
         printable = self._extract_printable_strings(raw_bytes, min_length=6)
         combined_text = "\n".join(printable) + "\n" + disasm
 
@@ -226,21 +234,9 @@ class MalfindStringsDetector(BaseDetector):
         # URL / C2 pattern
         urls = _RE_URL.findall(combined_text)
         if urls:
-            # Filter out obviously benign URLs (Microsoft, Windows update)
-            suspicious_urls = [
-                u
-                for u in urls
-                if not any(
-                    d in u.lower()
-                    for d in (
-                        "microsoft.com",
-                        "windows.com",
-                        "windowsupdate.com",
-                        "msftncsi.com",
-                        "msecnd.net",
-                    )
-                )
-            ]
+            # Filter out obviously benign URLs (Microsoft, Windows update) using
+            # exact host-suffix matching to avoid substring false passes.
+            suspicious_urls = [u for u in urls if not _host_suffix_is_benign(u)]
             if suspicious_urls:
                 results.append(
                     DetectorResult(
@@ -264,37 +260,19 @@ class MalfindStringsDetector(BaseDetector):
         # IP address pattern
         ips = _RE_IP.findall(combined_text)
         if ips:
-            external_ips = [
-                ip
-                for ip in ips
-                if not any(
-                    ip.startswith(p)
-                    for p in (
-                        "127.",
-                        "10.",
-                        "192.168.",
-                        "172.16.",
-                        "172.17.",
-                        "172.18.",
-                        "172.19.",
-                        "172.20.",
-                        "172.21.",
-                        "172.22.",
-                        "172.23.",
-                        "172.24.",
-                        "172.25.",
-                        "172.26.",
-                        "172.27.",
-                        "172.28.",
-                        "172.29.",
-                        "172.30.",
-                        "172.31.",
-                        "0.0.0.",
-                        "255.",
-                        "169.254.",
-                    )
-                )
-            ]
+            external_ips: list[str] = []
+            for ip in ips:
+                # The regex can capture "1.2.3.4:8080"; split off the port.
+                host = ip.split(":")[0] if ":" in ip else ip
+                try:
+                    # ipaddress.is_private() covers RFC1918, loopback, link-local,
+                    # 100.64.0.0/10 CGN, and documentation ranges — more robust
+                    # than the manual prefix list it replaces.
+                    if ipaddress.ip_address(host).is_private:
+                        continue
+                except ValueError:
+                    continue
+                external_ips.append(ip)
             if external_ips:
                 results.append(
                     DetectorResult(
@@ -385,7 +363,6 @@ class MalfindStringsDetector(BaseDetector):
     def _detect_linux(
         self,
         extraction: ExtractionResult,
-        vectors: list[ProcessFeatureVector],
     ) -> list[DetectorResult]:
         """Linux-specific IOC extraction from malfind regions (Gap 2 coverage).
 
@@ -405,9 +382,7 @@ class MalfindStringsDetector(BaseDetector):
         if not extraction.malfind:
             return findings
 
-        pid_to_name: dict[int, str] = {}
-        if extraction.process_tree:
-            pid_to_name = {pid: proc.name for pid, proc in extraction.process_tree.flat_map.items()}
+        pid_to_name = extraction.process_tree.name_map if extraction.process_tree else {}
 
         for pid, regions in extraction.malfind.items():
             proc_name = pid_to_name.get(pid, "<unknown>")
@@ -427,7 +402,7 @@ class MalfindStringsDetector(BaseDetector):
 
         hexdump = getattr(region, "hexdump", "") or ""
         disasm = getattr(region, "disassembly", "") or ""
-        raw_bytes = self._hexdump_to_bytes(hexdump)
+        raw_bytes = hexdump_to_bytes(hexdump)
         printable = self._extract_printable_strings(raw_bytes, min_length=6)
         combined_text = "\n".join(printable) + "\n" + disasm
 
@@ -523,38 +498,6 @@ class MalfindStringsDetector(BaseDetector):
             )
 
         return results
-
-    # ─── Helpers ──────────────────────────────────────────────────────────────
-
-    def _hexdump_to_bytes(self, hexdump: str) -> bytes:
-        """Convert a Volatility hexdump string to raw bytes.
-
-        Volatility malfind hexdump format (example line):
-            0x7ffe0000  4d 5a 90 00 03 00 00 00  04 00 00 00 ff ff 00 00  MZ......  ........
-
-        We strip the address prefix and ASCII column, extract hex bytes.
-        """
-        if not hexdump:
-            return b""
-
-        hex_bytes = []
-        for line in hexdump.splitlines():
-            # Remove address column (0x...)
-            if line.startswith("0x"):
-                parts = line.split()
-                # Skip the first element (address), collect hex pairs until ASCII
-                for part in parts[1:]:
-                    if len(part) == 2:
-                        try:
-                            hex_bytes.append(int(part, 16))
-                        except ValueError:
-                            break  # Hit ASCII column
-                    else:
-                        break
-        try:
-            return bytes(hex_bytes)
-        except (OverflowError, ValueError):
-            return b""
 
     def _extract_printable_strings(
         self,

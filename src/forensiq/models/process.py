@@ -10,12 +10,8 @@ Models:
 from __future__ import annotations
 
 from datetime import datetime
-from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field, field_validator
-
-if TYPE_CHECKING:
-    pass
 
 
 class ProcessArtifact(BaseModel):
@@ -228,6 +224,15 @@ class ProcessTree(BaseModel):
             All ProcessArtifacts sorted by PID.
         """
         return sorted(self.flat_map.values(), key=lambda p: p.pid)
+
+    @property
+    def name_map(self) -> dict[int, str]:
+        """Fast pid → process name lookup for all processes in the dump.
+
+        Returns:
+            Mapping of pid → ProcessArtifact.name for every process.
+        """
+        return {pid: proc.name for pid, proc in self.flat_map.items()}
 
     def __len__(self) -> int:
         return len(self.flat_map)

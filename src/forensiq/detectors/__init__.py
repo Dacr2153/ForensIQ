@@ -7,7 +7,7 @@ Detectors are discovered and run by the DetectorRegistry.
 Adding a new detector:
     1. Create forensiq/detectors/my_detector.py
     2. Subclass BaseDetector and implement detect()
-    3. Register with @register_detector decorator
+    3. Register an instance with DetectorRegistry.register()
 
 Available detectors:
     - ProcessAnomalyDetector: Threshold adaptive, masquerading, parent-child
@@ -20,11 +20,25 @@ Available detectors:
 """
 
 from forensiq.detectors.base import BaseDetector, DetectorResult, FindingSeverity
+from forensiq.detectors.cross_view import CrossViewDetector
+from forensiq.detectors.handles_mutex import HandlesMutexDetector
+from forensiq.detectors.malfind_strings import MalfindStringsDetector
+from forensiq.detectors.pe_header import PEHeaderDetector
+from forensiq.detectors.process_anomaly import ProcessAnomalyDetector
 from forensiq.detectors.registry import DetectorRegistry
+from forensiq.detectors.services_scan import ServicesScanDetector
+from forensiq.detectors.threat_intel import ThreatIntelDetector
 
 __all__ = [
     "BaseDetector",
+    "CrossViewDetector",
     "DetectorRegistry",
     "DetectorResult",
     "FindingSeverity",
+    "HandlesMutexDetector",
+    "MalfindStringsDetector",
+    "PEHeaderDetector",
+    "ProcessAnomalyDetector",
+    "ServicesScanDetector",
+    "ThreatIntelDetector",
 ]

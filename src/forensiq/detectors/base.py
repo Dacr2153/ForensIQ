@@ -113,7 +113,7 @@ class BaseDetector(abc.ABC):
     """Abstract base class for all ForensIQ detector plugins.
 
     Subclass this and implement detect() to create a new detector.
-    Register with DetectorRegistry.register() or @register_detector.
+    Register an instance with DetectorRegistry.register().
     """
 
     #: Unique snake_case name for this detector (used as registry key)

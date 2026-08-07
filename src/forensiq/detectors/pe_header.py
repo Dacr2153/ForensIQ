@@ -22,6 +22,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from forensiq.detectors.base import BaseDetector, DetectorResult, FindingSeverity
+from forensiq.utils.hexdump import hexdump_to_bytes
 from forensiq.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -118,9 +119,7 @@ class PEHeaderDetector(BaseDetector):
         if not extraction.malfind:
             return findings
 
-        pid_to_name: dict[int, str] = {}
-        if extraction.process_tree:
-            pid_to_name = {pid: proc.name for pid, proc in extraction.process_tree.flat_map.items()}
+        pid_to_name = extraction.process_tree.name_map if extraction.process_tree else {}
 
         for pid, regions in extraction.malfind.items():
             proc_name = pid_to_name.get(pid, "<unknown>")
@@ -139,7 +138,7 @@ class PEHeaderDetector(BaseDetector):
         import pefile
 
         hexdump = getattr(region, "hexdump", "") or ""
-        raw_bytes = self._hexdump_to_bytes(hexdump)
+        raw_bytes = hexdump_to_bytes(hexdump)
 
         if not raw_bytes or len(raw_bytes) < 64:
             return []
@@ -272,25 +271,3 @@ class PEHeaderDetector(BaseDetector):
             pass  # Malformed hexdump / PE parse error — skip region silently
 
         return results
-
-    def _hexdump_to_bytes(self, hexdump: str) -> bytes:
-        """Convert Volatility hexdump to raw bytes."""
-        if not hexdump:
-            return b""
-
-        hex_bytes = []
-        for line in hexdump.splitlines():
-            if line.startswith("0x"):
-                parts = line.split()
-                for part in parts[1:]:
-                    if len(part) == 2:
-                        try:
-                            hex_bytes.append(int(part, 16))
-                        except ValueError:
-                            break
-                    else:
-                        break
-        try:
-            return bytes(hex_bytes)
-        except (OverflowError, ValueError):
-            return b""

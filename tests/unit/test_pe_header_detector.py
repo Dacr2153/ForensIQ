@@ -9,24 +9,22 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from forensiq.detectors.pe_header import _PACKER_SECTIONS, _SUSPICIOUS_IMPORTS, PEHeaderDetector
+from forensiq.utils.hexdump import hexdump_to_bytes
 
-# ── _hexdump_to_bytes ─────────────────────────────────────────────────────────
+# ── hexdump_to_bytes (shared) ─────────────────────────────────────────────────
 
 
 class TestHexdumpToBytes:
-    def setup_method(self):
-        self.det = PEHeaderDetector()
-
     def test_empty_returns_empty(self):
-        assert self.det._hexdump_to_bytes("") == b""
+        assert hexdump_to_bytes("") == b""
 
     def test_none_like_returns_empty(self):
-        assert self.det._hexdump_to_bytes("") == b""
+        assert hexdump_to_bytes("") == b""
 
     def test_valid_line_parsed(self):
         # Volatility hexdump line: "0x00000000  4d 5a 90 00"
         hexdump = "0x00000000  4d 5a 90 00\n"
-        result = self.det._hexdump_to_bytes(hexdump)
+        result = hexdump_to_bytes(hexdump)
         assert result == b"\x4d\x5a\x90\x00"
 
     def test_multiple_lines(self):
@@ -34,13 +32,13 @@ class TestHexdumpToBytes:
             "0x00000000  4d 5a 90 00\n"
             "0x00000004  03 00 00 00\n"
         )
-        result = self.det._hexdump_to_bytes(hexdump)
+        result = hexdump_to_bytes(hexdump)
         assert result == b"\x4d\x5a\x90\x00\x03\x00\x00\x00"
 
     def test_non_hex_line_skipped(self):
         # Lines that don't start with "0x" are ignored
         hexdump = "random garbage\n0x00000000  ff ee\n"
-        result = self.det._hexdump_to_bytes(hexdump)
+        result = hexdump_to_bytes(hexdump)
         assert result == b"\xff\xee"
 
 

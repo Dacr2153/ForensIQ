@@ -82,8 +82,6 @@ class CrossViewDetector(BaseDetector):
 
         # Hidden processes: visible in pool scan but NOT in linked list
         hidden_pids = psscan_pids - pslist_pids
-        # Unlinked only from scan (visible in list but not pool — less common)
-        _orphan_pids = pslist_pids - psscan_pids
 
         log.info(
             "Cross-view comparison",

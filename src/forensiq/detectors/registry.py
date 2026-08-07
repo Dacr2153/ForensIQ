@@ -91,11 +91,26 @@ class DetectorRegistry:
                     error=str(exc),
                 )
 
-        # Sort by severity (critical first), then by pid
-        all_findings.sort(
-            key=lambda f: (-f.severity.score, f.pid),
+        # De-duplicate findings that are identical in (detector, pid, title) —
+        # a detector iterating regions/processes can otherwise emit duplicates.
+        seen: set[tuple[str, int, str]] = set()
+        deduped: list[DetectorResult] = []
+        for f in all_findings:
+            key = (f.detector, f.pid, f.title)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(f)
+
+        # Sort by severity (critical first), then by pid. Guard against a
+        # None/absent severity so a malformed finding can never crash the sort.
+        deduped.sort(
+            key=lambda f: (
+                -(f.severity.score if f.severity is not None else 0),
+                f.pid,
+            ),
         )
-        return all_findings
+        return deduped
 
     @property
     def detector_names(self) -> list[str]:

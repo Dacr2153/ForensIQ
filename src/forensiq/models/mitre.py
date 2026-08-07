@@ -2,7 +2,8 @@
 """MITRE ATT&CK technique mapping and aggregation.
 
 Provides:
-    - MITRE_TECHNIQUES: Complete dict of technique_id → full metadata
+    - MITRE_TECHNIQUES: dict of technique_id → metadata for techniques used
+      by ForensIQ detectors
     - MitreTechnique: Pydantic model for a single technique
     - build_mitre_summary(): Aggregate techniques from all findings
 

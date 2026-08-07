@@ -60,9 +60,7 @@ class HandlesMutexDetector(BaseDetector):
             log.info("No suspicious handles found")
             return []
 
-        pid_to_name: dict[int, str] = {}
-        if extraction.process_tree:
-            pid_to_name = {pid: proc.name for pid, proc in extraction.process_tree.flat_map.items()}
+        pid_to_name = extraction.process_tree.name_map if extraction.process_tree else {}
 
         for pid, handles in handles_by_pid.items():
             proc_name = pid_to_name.get(pid, handles[0].process_name if handles else "<unknown>")

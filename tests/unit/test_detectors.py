@@ -179,28 +179,34 @@ class TestDetectorRegistry:
         d2.detect.assert_called_once()
 
     def test_run_all_aggregates_findings(self) -> None:
+        """run_all aggregates findings, deduplicating by (detector, pid, title)."""
         registry = DetectorRegistry()
-        finding = DetectorResult(
-            detector="mock",
-            pid=100,
-            process_name="evil.exe",
-            severity=FindingSeverity.HIGH,
-            title="Test",
-            description="desc",
-            mitre_technique="T1055",
-            evidence={},
-            confidence=0.9,
-        )
+
+        def _finding(title: str) -> DetectorResult:
+            return DetectorResult(
+                detector="mock",
+                pid=100,
+                process_name="evil.exe",
+                severity=FindingSeverity.HIGH,
+                title=title,
+                description="desc",
+                mitre_technique="T1055",
+                evidence={},
+                confidence=0.9,
+            )
+
         d1 = self._make_detector("d1")
-        d1.detect.return_value = [finding]
+        d1.detect.return_value = [_finding("A")]
         d2 = self._make_detector("d2")
-        d2.detect.return_value = [finding, finding]
+        # The duplicate is an exact (detector, pid, title) match → deduped away
+        d2.detect.return_value = [_finding("A"), _finding("B")]
         registry.register(d1)
         registry.register(d2)
 
         extraction = _make_extraction()
         results = registry.run_all(extraction, [])
-        assert len(results) == 3
+        # A (deduped across detectors) + B = 2 distinct findings
+        assert len(results) == 2
 
     def test_disabled_detector_skipped(self) -> None:
         registry = DetectorRegistry()
@@ -293,13 +299,13 @@ class TestProcessAnomalyDetector:
         assert ADAPTIVE_THRESHOLDS["lsass.exe"] > score
 
     def test_masquerading_outside_system32(self) -> None:
-        """svchost.exe running from Temp is masquerading."""
+        """lsass.exe running from Temp is masquerading."""
         from forensiq.detectors.process_anomaly import ProcessAnomalyDetector
 
         detector = ProcessAnomalyDetector()
         v = _make_vector(
-            name="svchost.exe",
-            path="C:\\Users\\user\\AppData\\Local\\Temp\\svchost.exe",
+            name="lsass.exe",
+            path="C:\\Users\\user\\AppData\\Local\\Temp\\lsass.exe",
             threat_score=0.80,
         )
         # Override is_system_path for this test — not in system dir
@@ -308,6 +314,25 @@ class TestProcessAnomalyDetector:
         results = detector.detect(extraction, [v])
         mitre_ids = [r.mitre_technique for r in results]
         assert "T1036.005" in mitre_ids
+
+    def test_masquerading_unknown_parent_not_flagged(self) -> None:
+        """svchost with an unverifiable (unknown) parent must not be flagged."""
+        from forensiq.detectors.process_anomaly import ProcessAnomalyDetector
+
+        detector = ProcessAnomalyDetector()
+        v = _make_vector(
+            name="svchost.exe",
+            path="C:\\Users\\user\\AppData\\Local\\Temp\\svchost.exe",
+            threat_score=0.80,
+        )
+        # is_system_path default True for svchost; parent PID 4 is not in the
+        # tree (flat_map only holds v), so its parent resolves to "unknown" and
+        # must be ignored rather than flagged.
+        extraction = _make_extraction([v])
+        results = detector.detect(extraction, [v])
+        assert all(
+            r.mitre_technique != "T1036.005" or r.pid != v.pid for r in results
+        )
 
     def test_suspicious_dll_path(self) -> None:
         """Process with DLL from Temp path should generate finding."""
@@ -432,7 +457,7 @@ class TestProcessAnomalyDetector:
 
         dll1 = MagicMock()
         dll1.is_suspicious = True
-        dll1.full_path = "/tmp/rootkit.so"
+        dll1.full_dll_name = "/tmp/rootkit.so"
 
         extraction = _make_extraction([v])
         extraction.is_linux = True
