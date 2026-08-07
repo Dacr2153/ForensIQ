@@ -27,12 +27,9 @@ from collections.abc import Generator, Mapping, MutableMapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 
 import structlog
-
-if TYPE_CHECKING:
-    pass
 
 # ─── Context Variables ────────────────────────────────────────────────────────
 # These are stored per async-task / per-thread using Python's contextvars
