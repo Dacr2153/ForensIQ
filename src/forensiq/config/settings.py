@@ -20,9 +20,8 @@ from __future__ import annotations
 import shutil
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -39,6 +38,9 @@ class Settings(BaseSettings):
         env_prefix="FORENSIQ_",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        # An empty env var (FORENSIQ_X="") must not clobber a configured default —
+        # it is treated as "not set" so unset-but-exported variables stay sane.
+        env_ignore_empty=True,
         # Allow extra fields without raising an error (forward compatibility)
         extra="ignore",
     )
@@ -59,8 +61,8 @@ class Settings(BaseSettings):
         default="mistral:latest",
         description="Ollama model to use for YARA rule generation.",
     )
-    OLLAMA_TIMEOUT: Annotated[int, Field(gt=0, le=600)] = Field(
-        default=120,
+    OLLAMA_TIMEOUT: int = Field(
+        default=120, gt=0, le=600,
         description="Timeout in seconds for Ollama API requests.",
     )
 
@@ -81,14 +83,14 @@ class Settings(BaseSettings):
     )
 
     # ─── Analysis Limits ──────────────────────────────────────────────────────
-    MAX_PROCESSES_ANALYZE: Annotated[int, Field(ge=0)] = Field(
-        default=500,
+    MAX_PROCESSES_ANALYZE: int = Field(
+        default=500, ge=0,
         description="Max number of processes to analyze. 0 = unlimited.",
     )
 
     # ─── Detection ────────────────────────────────────────────────────────────
-    THREAT_THRESHOLD: Annotated[float, Field(gt=0.0, lt=1.0)] = Field(
-        default=0.65,
+    THREAT_THRESHOLD: float = Field(
+        default=0.65, gt=0.0, lt=1.0,
         description="Probability threshold above which a process is classified as malicious.",
     )
     YARA_GENERATE: bool = Field(
@@ -155,12 +157,6 @@ class Settings(BaseSettings):
             raise ValueError("OLLAMA_BASE_URL must start with http:// or https://")
         return v.rstrip("/")  # Remove trailing slash for consistent URL construction
 
-    @model_validator(mode="after")
-    def create_output_directories(self) -> Settings:
-        """Create output directories if they don't exist."""
-        Path(self.REPORTS_DIR).mkdir(parents=True, exist_ok=True)
-        return self
-
     # ─── Convenience Methods ──────────────────────────────────────────────────
 
     def get_model_path(self) -> Path:
@@ -195,12 +191,23 @@ class Settings(BaseSettings):
         return candidate
 
     def get_reports_dir(self) -> Path:
-        """Return the resolved absolute path to the reports output directory."""
-        return Path(self.REPORTS_DIR).resolve()
+        """Return the resolved absolute path to the reports output directory.
+
+        Creates the directory lazily on first use so instantiating Settings
+        (import time) has no filesystem side effects.
+        """
+        path = Path(self.REPORTS_DIR).resolve()
+        path.mkdir(parents=True, exist_ok=True)
+        return path
 
     def get_yara_rules_dir(self) -> Path:
-        """Return the resolved absolute path to the YARA rules output directory."""
-        return Path(self.YARA_RULES_DIR).resolve()
+        """Return the resolved absolute path to the YARA rules output directory.
+
+        Creates the directory lazily on first use.
+        """
+        path = Path(self.YARA_RULES_DIR).resolve()
+        path.mkdir(parents=True, exist_ok=True)
+        return path
 
     def get_dll_root(self) -> Path | None:
         """Return the resolved absolute DLL content root, or None if unset.
@@ -272,17 +279,11 @@ class Settings(BaseSettings):
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    """Return the singleton Settings instance (loaded once, cached forever).
+    """Return the process-scoped singleton Settings instance.
 
-    Uses lru_cache to ensure Settings is only instantiated and validated once.
-    The cache is process-scoped, not thread-local.
-
-    Returns:
-        The global Settings instance.
-
-    Example:
-        from forensiq.config.settings import get_settings
-        settings = get_settings()
-        print(settings.THREAT_THRESHOLD)  # 0.65
+    Uses lru_cache so Settings is instantiated and validated exactly once per
+    process. Because the cache is process-scoped, changes to environment
+    variables after the first call are not picked up — tests that need fresh
+    settings should call ``get_settings.cache_clear()`` first.
     """
     return Settings()
