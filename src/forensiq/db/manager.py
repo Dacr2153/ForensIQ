@@ -25,6 +25,7 @@ automatically on first use. Override with FORENSIQ_DB_PATH env var.
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -129,11 +130,19 @@ class ForensiqDatabase:
 
     async def connect(self) -> None:
         """Open database connection and create schema if needed."""
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        # Forensic findings are sensitive — restrict directory and DB file to
+        # the owning user regardless of the process umask.
+        self.db_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self._conn = await aiosqlite.connect(self.db_path)
+        if os.name == "posix":
+            try:
+                self.db_path.chmod(0o600)
+            except OSError:
+                log.warning("Could not restrict DB file permissions", path=str(self.db_path))
         self._conn.row_factory = aiosqlite.Row
         # Enable WAL mode for concurrent reads
         await self._conn.execute("PRAGMA journal_mode=WAL")
+        await self._conn.execute("PRAGMA busy_timeout=5000")
         await self._conn.execute("PRAGMA foreign_keys=ON")
         await self._conn.executescript(_SCHEMA_SQL)
         await self._conn.commit()
@@ -205,9 +214,135 @@ class ForensiqDatabase:
         )
         return analysis_id  # type: ignore[return-value]
 
+    async def save_analysis_bundle(
+        self,
+        dump_name: str,
+        dump_sha256: str,
+        dump_size_bytes: int,
+        forensiq_version: str,
+        volatility_version: str,
+        total_processes: int,
+        malicious_count: int,
+        suspicious_count: int,
+        timeline_events: int,
+        yara_rules_count: int,
+        findings: list[Any] | None = None,
+        yara_results: list[Any] | None = None,
+    ) -> int:
+        """Atomically save an analysis with its findings and YARA rules.
+
+        All writes happen inside a single SQLite transaction: if any insert
+        fails, the whole bundle is rolled back so the DB never contains an
+        analysis with missing findings (or vice versa).
+
+        Returns:
+            The new analysis ID.
+
+        Raises:
+            RuntimeError: If the database is not connected.
+        """
+        if self._conn is None:
+            raise RuntimeError("Database not connected")
+        now = datetime.now(tz=UTC).isoformat()
+
+        try:
+            await self._conn.execute("BEGIN IMMEDIATE")
+            cursor = await self._conn.execute(
+                """
+                INSERT INTO analyses (
+                    dump_name, dump_sha256, dump_size_bytes, analysis_ts,
+                    forensiq_ver, volatility_ver, total_processes,
+                    malicious_count, suspicious_count, timeline_events, yara_rules_count
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    dump_name,
+                    dump_sha256,
+                    dump_size_bytes,
+                    now,
+                    forensiq_version,
+                    volatility_version,
+                    total_processes,
+                    malicious_count,
+                    suspicious_count,
+                    timeline_events,
+                    yara_rules_count,
+                ),
+            )
+            analysis_id = int(cursor.lastrowid or 0)
+
+            if findings:
+                finding_rows = []
+                for f in findings:
+                    finding_rows.append(
+                        (
+                            analysis_id,
+                            f.detector,
+                            f.pid,
+                            f.process_name,
+                            f.severity.value,
+                            f.title,
+                            f.description,
+                            f.mitre_technique,
+                            f.confidence,
+                            json.dumps(f.evidence),
+                            now,
+                        )
+                    )
+                await self._conn.executemany(
+                    """
+                    INSERT INTO findings (
+                        analysis_id, detector, pid, process_name, severity,
+                        title, description, mitre_technique, confidence,
+                        evidence_json, found_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    finding_rows,
+                )
+
+            if yara_results:
+                yara_rows = []
+                for y in yara_results:
+                    yara_rows.append(
+                        (
+                            analysis_id,
+                            getattr(y, "rule_name", ""),
+                            getattr(y, "process_name", ""),
+                            getattr(y, "pid", 0),
+                            getattr(y, "rule_content", ""),
+                            1 if getattr(y, "is_valid", False) else 0,
+                            now,
+                        )
+                    )
+                await self._conn.executemany(
+                    """
+                    INSERT INTO yara_rules (
+                        analysis_id, rule_name, process_name, pid,
+                        rule_content, is_valid, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    yara_rows,
+                )
+
+            await self._conn.commit()
+        except Exception:
+            await self._conn.rollback()
+            raise
+
+        log.info(
+            "Analysis bundle persisted to database",
+            analysis_id=analysis_id,
+            dump=dump_name,
+            findings=len(findings) if findings else 0,
+            yara_rules=len(yara_results) if yara_results else 0,
+        )
+        return analysis_id
+
     async def get_recent_analyses(self, limit: int = 20) -> list[dict[str, Any]]:
         """Return the most recent analysis records."""
         assert self._conn is not None
+        # Clamp the limit so an out-of-range or negative value cannot crash SQLite.
+        limit = max(1, min(int(limit), 500))
         cursor = await self._conn.execute(
             "SELECT * FROM analyses ORDER BY analysis_ts DESC LIMIT ?",
             (limit,),
@@ -280,7 +415,18 @@ class ForensiqDatabase:
         """Return all findings for a given analysis."""
         assert self._conn is not None
         cursor = await self._conn.execute(
-            "SELECT * FROM findings WHERE analysis_id = ? ORDER BY severity",
+            """
+            SELECT * FROM findings WHERE analysis_id = ?
+            ORDER BY
+                CASE severity
+                    WHEN 'critical' THEN 0
+                    WHEN 'high' THEN 1
+                    WHEN 'medium' THEN 2
+                    WHEN 'low' THEN 3
+                    ELSE 4
+                END,
+                pid
+            """,
             (analysis_id,),
         )
         rows = await cursor.fetchall()
@@ -304,7 +450,10 @@ class ForensiqDatabase:
         if row:
             data = dict(row)
             if data.get("raw_json"):
-                data["raw_json"] = json.loads(data["raw_json"])
+                try:
+                    data["raw_json"] = json.loads(data["raw_json"])
+                except (ValueError, TypeError):
+                    data["raw_json"] = {}
             return data
         return None
 
@@ -399,15 +548,15 @@ class ForensiqDatabase:
         assert self._conn is not None
         cursor = await self._conn.execute("SELECT COUNT(*) as total_analyses FROM analyses")
         row = await cursor.fetchone()
-        total_analyses = dict(row)["total_analyses"] if row else 0
+        total_analyses = dict(row)["total_analyses"] if row is not None else 0
 
         cursor = await self._conn.execute("SELECT COUNT(*) as total_findings FROM findings")
         row = await cursor.fetchone()
-        total_findings = dict(row)["total_findings"] if row else 0
+        total_findings = dict(row)["total_findings"] if row is not None else 0
 
         cursor = await self._conn.execute("SELECT COUNT(*) as cache_entries FROM threat_intel")
         row = await cursor.fetchone()
-        cache_entries = dict(row)["cache_entries"] if row else 0
+        cache_entries = dict(row)["cache_entries"] if row is not None else 0
 
         return {
             "total_analyses": total_analyses,

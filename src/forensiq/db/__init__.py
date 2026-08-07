@@ -5,7 +5,7 @@ Stores analysis results persistently for:
     - Trend analysis across multiple dumps
     - IOC caching (VirusTotal/MalwareBazaar lookups)
     - Cross-dump comparison (new process vs. baseline)
-    - YARA rule deduplication
+    - Generated YARA rules linked to each analysis
 
 Usage:
     from forensiq.db.manager import ForensiqDatabase

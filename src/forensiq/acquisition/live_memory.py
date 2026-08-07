@@ -87,6 +87,10 @@ _KERNEL_RELEASE = _safe_kernel_release(os.uname().release)
 
 # Candidate locations where a pre-built LiME module might live.
 # Ordered from most-specific (current kernel) to most-generic.
+# SECURITY: only trusted, system-level or ForensIQ-owned paths are searched.
+# CWD and $HOME are deliberately excluded — a planted lime.ko in a directory
+# (or a downloaded attachment) must never be auto-loaded into the kernel as
+# root.  Use --lime-module with an explicit path for such modules.
 _LIME_SEARCH_PATHS: list[Path] = [
     # ForensIQ-built module (kernel-specific)
     _FORENSIQ_LIME_DIR / f"lime-{_KERNEL_RELEASE}.ko",
@@ -99,9 +103,6 @@ _LIME_SEARCH_PATHS: list[Path] = [
     Path("/usr/lib/lime/lime.ko"),
     Path("/usr/local/lib/lime/lime.ko"),
     Path("/opt/lime/lime.ko"),
-    # Local directory and home
-    Path.cwd() / "lime.ko",
-    Path.home() / "lime.ko",
 ]
 
 # Maximum seconds to wait for the LiME dump file to appear / grow stable.
@@ -361,21 +362,21 @@ def build_lime_from_source(
             decompressed = src_dir / "lime.ko"
             _emit(f"Decompressing {built_ko.name} → lime.ko …")
             if built_ko.suffix == ".zst":
-                decomp: subprocess.CompletedProcess[str] = subprocess.run(
+                decomp: subprocess.CompletedProcess[bytes] = subprocess.run(
                     ["zstd", "-d", str(built_ko), "-o", str(decompressed), "--force"],
                     capture_output=True,
-                    text=True,
                     timeout=30,
                 )
             elif built_ko.suffix == ".xz":
+                # Binary mode: kernel modules are not valid UTF-8 — decoding via
+                # text=True would corrupt the bytes or raise UnicodeDecodeError.
                 decomp = subprocess.run(
-                    ["xz", "-dk", str(built_ko), "--stdout"],
+                    ["xz", "-d", str(built_ko), "--stdout"],
                     capture_output=True,
-                    text=True,
                     timeout=30,
                 )
                 if decomp.returncode == 0:
-                    decompressed.write_bytes(decomp.stdout.encode())
+                    decompressed.write_bytes(decomp.stdout)
             else:  # .gz
                 import gzip
 
@@ -384,7 +385,7 @@ def build_lime_from_source(
                 decomp = subprocess.CompletedProcess([], 0)
 
             if decomp.returncode != 0:
-                err = decomp.stderr if isinstance(decomp.stderr, str) else decomp.stderr.decode()
+                err = (decomp.stderr or b"").decode(errors="replace")
                 raise LiveMemoryError(f"Failed to decompress {built_ko.name}: {err.strip()}")
             built_ko = decompressed
 

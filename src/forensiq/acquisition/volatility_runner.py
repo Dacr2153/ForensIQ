@@ -18,6 +18,7 @@ Usage:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import subprocess
@@ -142,6 +143,19 @@ class VolatilityRunner:
 
             self._plugin_cache = PluginCache()
         return self._plugin_cache
+
+    def _cache_key(self, plugin: str, extra_args: list[str] | None = None) -> str:
+        """Build the plugin cache key, including extra args so runs of the same
+        plugin with different arguments never collide.
+
+        The base plugin name is validated by the caller (cache-safe), and a
+        short hash of the extra args is appended when present to keep the key
+        filename-safe.
+        """
+        if not extra_args:
+            return plugin
+        args_digest = hashlib.sha256(" ".join(extra_args).encode()).hexdigest()[:12]
+        return f"{plugin}.x{args_digest}"
 
     def _build_command(self, plugin: str, extra_args: list[str] | None = None) -> list[str]:
         """Construct the vol command for a plugin invocation.
@@ -289,6 +303,7 @@ class VolatilityRunner:
                 cmd,
                 capture_output=True,
                 text=True,
+                errors="replace",
                 timeout=self.timeout,
                 # NOTE: Do NOT use shell=True — prevents shell injection
             )
@@ -365,10 +380,12 @@ class VolatilityRunner:
         """
         import asyncio
 
+        cache_key = self._cache_key(plugin, extra_args)
+
         # ── Cache lookup ──────────────────────────────────────────────────────
         if self.dump_sha256:
             cache = self._get_cache()
-            cached_rows = cache.load(self.dump_sha256, plugin)
+            cached_rows = cache.load(self.dump_sha256, cache_key)
             if cached_rows is not None:
                 return cached_rows
 
@@ -381,18 +398,6 @@ class VolatilityRunner:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            try:
-                stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                    proc.communicate(),
-                    timeout=self.timeout,
-                )
-            except TimeoutError as exc:
-                proc.kill()
-                await proc.communicate()
-                raise VolatilityTimeoutError(
-                    plugin=plugin,
-                    timeout_seconds=self.timeout,
-                ) from exc
         except FileNotFoundError as exc:
             raise AcquisitionError(
                 message=f"Volatility 3 executable not found: {cmd[0]}",
@@ -400,6 +405,47 @@ class VolatilityRunner:
         except OSError as exc:
             raise AcquisitionError(
                 message=f"OS error invoking Volatility 3 async for plugin '{plugin}': {exc}",
+            ) from exc
+
+        # Stream output in chunks rather than buffering the whole stdout/stderr
+        # at once — plugin output for large dumps (vadinfo, dlllist) can be
+        # tens of MB and blocking on communicate() would double memory usage.
+        async def _drain(reader: asyncio.StreamReader) -> bytes:
+            chunks: list[bytes] = []
+            while True:
+                chunk = await reader.read(64 * 1024)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            return b"".join(chunks)
+
+        # stdout/stderr were created with PIPE above, so both readers are bound
+        # (typed as Optional by asyncio's subprocess protocol).
+        stdout_reader = proc.stdout
+        stderr_reader = proc.stderr
+        if stdout_reader is None or stderr_reader is None:
+            proc.kill()
+            raise AcquisitionError(
+                message=f"Async Volatility 3 failed to open output pipes for '{plugin}'",
+            )
+
+        try:
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                asyncio.gather(_drain(stdout_reader), _drain(stderr_reader)),
+                timeout=self.timeout,
+            )
+        except TimeoutError as exc:
+            # asyncio.wait_for raises asyncio.TimeoutError (Python 3.10) which
+            # is aliased to the builtin TimeoutError on 3.11+. Catching the
+            # builtin covers both.
+            proc.kill()
+            try:
+                await proc.communicate()
+            except Exception:  # noqa: S110
+                pass  # Process may already be dead
+            raise VolatilityTimeoutError(
+                plugin=plugin,
+                timeout_seconds=self.timeout,
             ) from exc
 
         stdout = stdout_bytes.decode("utf-8", errors="replace")
@@ -422,7 +468,7 @@ class VolatilityRunner:
         if self.dump_sha256 and rows is not None:
             try:
                 cache = self._get_cache()
-                cache.save(self.dump_sha256, plugin, rows)
+                cache.save(self.dump_sha256, cache_key, rows)
             except Exception:  # noqa: S110
                 pass  # Cache write failure is never fatal
 
@@ -447,6 +493,7 @@ class VolatilityRunner:
                     [vol_path, flag],
                     capture_output=True,
                     text=True,
+                    errors="replace",
                     timeout=10,
                 )
                 candidate = result.stdout.strip() or result.stderr.strip()

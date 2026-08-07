@@ -7,17 +7,12 @@ that repeated analyses of the same dump skip the Volatility subprocess.
 
 Cache layout:
     ~/.forensiq/cache/
-        {dump_sha256}/
-            windows.pslist.json
-            windows.cmdline.json
-            windows.netscan.json
-            windows.dlllist.json
-            windows.malfind.json
-            windows.vadinfo.json
-            windows.psscan.json
-            windows.svcscan.json
-            windows.handles.json
-            ...
+        {sha256[:16]}/
+            {sha256[16:]}/
+                windows.pslist.v1.json
+                windows.cmdline.v1.json
+                windows.netscan.v1.json
+                ...
 
 Each cache file contains a JSON array of row dicts (exactly what
 VolatilityRunner.run_plugin_async() returns).
@@ -40,6 +35,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +47,20 @@ log = get_logger(__name__)
 # Plugin names that are safe (only alphanumeric + dot) — prevent path traversal
 _SAFE_PLUGIN_RE = re.compile(r"^[a-zA-Z0-9._-]+$")
 _CACHE_VERSION = "v1"
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _validate_sha256(sha256: str) -> str:
+    """Validate a dump SHA-256 digest.
+
+    The digest is used to build filesystem paths (and to delete directories),
+    so it must be exactly 64 lowercase hex characters to prevent traversal.
+
+    Raises ValueError if the value is not a valid SHA-256 hex digest.
+    """
+    if not _SHA256_RE.match(sha256):
+        raise ValueError(f"Invalid SHA-256 digest for cache key: {sha256!r}")
+    return sha256
 
 
 def _sanitize_plugin_name(plugin: str) -> str:
@@ -79,7 +90,12 @@ class PluginCache:
         disabled: bool | None = None,
     ) -> None:
         if disabled is None:
-            disabled = os.environ.get("FORENSIQ_CACHE_DISABLED", "0").strip() == "1"
+            disabled = os.environ.get("FORENSIQ_CACHE_DISABLED", "0").strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
         self._disabled = disabled
 
         if cache_dir is None:
@@ -90,7 +106,7 @@ class PluginCache:
         """Return the full path for a cache entry."""
         safe_plugin = _sanitize_plugin_name(plugin)
         # First 16 chars of sha256 as subdirectory prefix (avoid huge dirs)
-        subdir = self._root / sha256[:16] / sha256[16:]
+        subdir = self._root / _validate_sha256(sha256)[:16] / _validate_sha256(sha256)[16:]
         return subdir / f"{safe_plugin}.{_CACHE_VERSION}.json"
 
     def is_cached(self, sha256: str, plugin: str) -> bool:
@@ -142,10 +158,22 @@ class PluginCache:
         try:
             path = self._entry_path(sha256, plugin)
             path.parent.mkdir(parents=True, exist_ok=True)
-            # Write atomically via a temp file to avoid partial writes
-            tmp = path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
-            tmp.replace(path)
+            # Write atomically via a unique temp file, then fsync + replace to
+            # avoid partial writes and .tmp collisions between concurrent runs.
+            fd, tmp_name = tempfile.mkstemp(
+                dir=str(path.parent), prefix=".", suffix=".tmp"
+            )
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    json.dump(rows, fh, ensure_ascii=False)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                # Cache holds forensic findings — restrict read access
+                Path(tmp_name).chmod(0o600)
+                Path(tmp_name).replace(path)
+            finally:
+                if Path(tmp_name).exists():
+                    Path(tmp_name).unlink()
             log.debug("Plugin cache SAVED", plugin=plugin, rows=len(rows), path=str(path))
         except Exception as exc:
             log.warning("Cache save failed (non-fatal)", plugin=plugin, error=str(exc))
@@ -169,8 +197,6 @@ class PluginCache:
                 path = self._entry_path(sha256, "dummy")
                 subdir = path.parent
                 if subdir.exists():
-                    import shutil
-
                     shutil.rmtree(subdir)
                     log.info("Cache invalidated (all plugins)", sha256=sha256[:12])
         except Exception as exc:
