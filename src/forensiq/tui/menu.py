@@ -72,33 +72,46 @@ def _separator() -> None:
 
 
 def _ask_choice(message: str, choices: list[tuple[str, str]]) -> str:
-    """Display a questionary select menu and return the chosen value."""
+    """Display a questionary select menu and return the chosen value.
+
+    Returns "exit" when the user cancels (Ctrl+C) or stdin is closed (EOF),
+    so callers can always continue the main loop without a crash.
+    """
     import questionary
 
     labels = [label for label, _ in choices]
     value_map = dict(choices)
-    selected = questionary.select(
-        message,
-        choices=labels,
-        style=_qs_style(),
-    ).ask()
+    try:
+        selected = questionary.select(
+            message,
+            choices=labels,
+            style=_qs_style(),
+        ).ask()
+    except (KeyboardInterrupt, EOFError):
+        return "exit"
     if selected is None:
         return "exit"
     return value_map.get(selected, "exit")
 
 
 def _ask_path(message: str, must_exist: bool = False) -> Path | None:
-    """Prompt for a file/directory path."""
+    """Prompt for a file/directory path. Returns None on cancel/EOF."""
     import questionary
 
     while True:
-        raw = questionary.path(message, style=_qs_style()).ask()
+        try:
+            raw = questionary.path(message, style=_qs_style()).ask()
+        except (KeyboardInterrupt, EOFError):
+            return None
         if raw is None:
             return None
         p = Path(raw).expanduser().resolve()
         if must_exist and not p.exists():
             err_console.print(f"[red]Error:[/red] Path does not exist: {p}")
-            retry = questionary.confirm("Try again?", style=_qs_style()).ask()
+            try:
+                retry = questionary.confirm("Try again?", style=_qs_style()).ask()
+            except (KeyboardInterrupt, EOFError):
+                return None
             if not retry:
                 return None
             continue
@@ -106,19 +119,66 @@ def _ask_path(message: str, must_exist: bool = False) -> Path | None:
 
 
 def _ask_text(message: str, default: str = "") -> str | None:
-    """Prompt for a text string."""
+    """Prompt for a text string. Returns None on cancel/EOF."""
     import questionary
 
-    result = questionary.text(message, default=default, style=_qs_style()).ask()
+    try:
+        result = questionary.text(message, default=default, style=_qs_style()).ask()
+    except (KeyboardInterrupt, EOFError):
+        return None
     return str(result) if result is not None else None
 
 
 def _ask_confirm(message: str, default: bool = True) -> bool:
-    """Prompt for yes/no confirmation."""
+    """Prompt for yes/no confirmation.
+
+    On EOF the prompt cannot be answered — fall back to the provided default
+    instead of crashing. Ctrl+C raises KeyboardInterrupt and is left for the
+    caller to handle (it aborts the current sub-menu).
+    """
     import questionary
 
-    result = questionary.confirm(message, default=default, style=_qs_style()).ask()
-    return bool(result)
+    try:
+        result = questionary.confirm(message, default=default, style=_qs_style()).ask()
+    except EOFError:
+        return default
+    return bool(result) if result is not None else default
+
+
+def _ask_output_dir(message: str, default: str = "./reports") -> Path:
+    """Prompt for an output directory and return it as a resolved Path.
+
+    Falls back to ``default`` when the user leaves the prompt empty or cancels.
+    """
+    raw = _ask_text(message, default=default)
+    return Path(raw).expanduser().resolve() if raw else Path(default)
+
+
+def _print_cached_analysis_info(cached: dict[str, Any]) -> None:
+    """Display a summary of a previously cached analysis to the user."""
+    ts = cached.get("analysis_ts", "unknown")
+    malicious = cached.get("malicious_count", 0)
+    suspicious = cached.get("suspicious_count", 0)
+    total = cached.get("total_processes", 0)
+    sha = (cached.get("dump_sha256") or "")[:16]
+
+    threat_color = "red" if malicious else ("yellow" if suspicious else "green")
+    threat_label = "MALICIOUS" if malicious else ("SUSPICIOUS" if suspicious else "CLEAN")
+
+    console.print()
+    console.print(
+        Panel(
+            f"[bold yellow]Previously analyzed dump found[/bold yellow]\n\n"
+            f"[dim]SHA-256:[/dim]     [cyan]{sha}...[/cyan]\n"
+            f"[dim]Analyzed on:[/dim] [white]{ts}[/white]\n"
+            f"[dim]Processes:[/dim]   {total}\n"
+            f"[dim]Malicious:[/dim]   {malicious}\n"
+            f"[dim]Suspicious:[/dim]  {suspicious}\n\n"
+            f"[{threat_color}]Threat level: {threat_label}[/{threat_color}]",
+            border_style="yellow",
+        )
+    )
+    console.print()
 
 
 def _qs_style() -> Any:
@@ -169,12 +229,9 @@ def _menu_analyze() -> None:
     console.print()
     console.print("[bold]Step 2 of 5 — Output directory[/bold]")
     console.print("[dim]HTML report, JSON report, and YARA rules will be written here.[/dim]")
-    output_dir_raw = _ask_text(
+    output_dir = _ask_output_dir(
         "Output directory for reports:",
         default=str(Path("./reports").resolve()),
-    )
-    output_dir = (
-        Path(output_dir_raw).expanduser().resolve() if output_dir_raw else Path("./reports")
     )
 
     # Step 3 — Threat threshold
@@ -262,300 +319,6 @@ def _menu_analyze() -> None:
             err_console.print(f"[yellow]STIX export failed:[/yellow] {exc}")
 
 
-def _menu_live() -> None:
-    """Interactive wizard for live memory analysis via /proc/kcore or LiME."""
-    from forensiq.acquisition.live_memory import (
-        LiveMemoryError,
-        acquire_lime_dump,
-        check_live_requirements,
-    )
-
-    console.print(
-        Panel(
-            "[bold]Live Memory Analysis[/bold]\n"
-            "[dim]Checks system prerequisites then acquires and analyzes the running\n"
-            "Linux kernel memory. Two acquisition methods are supported:\n"
-            "  /proc/kcore  \u2014 standard kernels (fastest, no module needed)\n"
-            "  LiME         \u2014 linux-hardened kernels where /proc/kcore is disabled[/dim]",
-            border_style="cyan",
-            padding=(0, 1),
-        )
-    )
-    console.print()
-
-    reqs = check_live_requirements()
-
-    # ── Diagnostics table ────────────────────────────────────────────────────
-    console.print("[dim]Prerequisite check:[/dim]")
-    table = Table(show_header=True, box=box.SIMPLE, padding=(0, 1))
-    table.add_column("Requirement", style="dim")
-    table.add_column("Status")
-    table.add_column("Notes", style="dim")
-
-    table.add_row(
-        "Linux OS",
-        "[green]OK[/green]" if reqs["is_linux"] else "[red]FAIL[/red]",
-        "",
-    )
-    table.add_row(
-        "Kernel variant",
-        "[yellow]hardened[/yellow]" if reqs.get("kernel_hardened") else "[green]standard[/green]",
-        reqs.get("kernel_release", ""),
-    )
-    table.add_row(
-        "Running as root",
-        "[green]OK[/green]" if reqs["has_root"] else "[yellow]NO[/yellow]",
-        "sudo required for both acquisition methods" if not reqs["has_root"] else "",
-    )
-    table.add_row(
-        "/proc/kcore",
-        "[green]available[/green]" if reqs["kcore_exists"] else "[red]disabled[/red]",
-        "CONFIG_PROC_KCORE=n on hardened kernel"
-        if reqs.get("kernel_hardened") and not reqs["kcore_exists"]
-        else "",
-    )
-    table.add_row(
-        "LiME module (lime.ko)",
-        "[green]found[/green]" if reqs.get("lime_available") else "[yellow]not found[/yellow]",
-        reqs.get("lime_module_path")
-        or (
-            "Can build automatically: sudo forensiq live --build-lime"
-            if reqs.get("lime_can_build")
-            else "lime.ko not found \u2014 must build from source"
-        ),
-    )
-    table.add_row(
-        "Kernel ISF (Volatility 3)",
-        "[green]built[/green]" if reqs.get("linux_isf_available") else "[yellow]not built[/yellow]",
-        reqs.get("linux_isf_path")
-        or (
-            "Build: forensiq live --build-isf"
-            if reqs.get("linux_isf_can_build")
-            else "Symbol table required for Volatility 3 Linux plugins"
-        ),
-    )
-    console.print(table)
-    console.print()
-
-    # ── Route to the available acquisition method ─────────────────────────────
-    if reqs["ready"]:
-        # /proc/kcore is accessible — use it directly
-        _run_live_kcore(reqs)
-        return
-
-    # /proc/kcore not available — check LiME
-    if not reqs["is_linux"]:
-        console.print("[red]Live analysis requires Linux.[/red]")
-        return
-
-    if reqs.get("kernel_hardened") and not reqs["kcore_exists"]:
-        console.print(
-            "[yellow]Note:[/yellow] This linux-hardened kernel has /proc/kcore disabled\n"
-            "(security policy).\n"
-            "[dim]ForensIQ will use LiME (Linux Memory Extractor) instead.[/dim]\n"
-        )
-
-    if not reqs.get("lime_available"):
-        # Neither method available — show install instructions with build option
-        if reqs.get("lime_can_build"):
-            console.print(
-                "\n[yellow]LiME not built yet[/yellow] — but all build tools are available.\n"
-            )
-            if not _ask_confirm(
-                "Build LiME from source now? (requires internet + ~30s)", default=True
-            ):
-                console.print(
-                    "[dim]Manual build:[/dim]\n"
-                    "  git clone https://github.com/504ensicsLabs/LiME\n"
-                    "  make -C LiME/src\n"
-                    "  sudo forensiq live --lime --lime-module LiME/src/lime.ko"
-                )
-                return
-
-            if not reqs["has_root"]:
-                console.print(
-                    "[red]Root is required for LiME acquisition after build.[/red]\n"
-                    "Re-run: [cyan]sudo forensiq menu[/cyan]"
-                )
-                return
-
-            from forensiq.acquisition.live_memory import LiveMemoryError, build_lime_from_source
-
-            try:
-                built_path = build_lime_from_source(
-                    progress_callback=lambda msg: console.print(f"  [dim]{msg}[/dim]")
-                )
-            except (RuntimeError, LiveMemoryError) as exc:
-                err_console.print(f"[red]Build failed:[/red] {exc}")
-                return
-
-            console.print(f"\n[green]LiME built:[/green] {built_path}\n")
-            # Re-check now that module is built
-            from forensiq.acquisition.live_memory import check_live_requirements
-
-            reqs = check_live_requirements()
-        else:
-            console.print(
-                Panel(
-                    "[bold yellow]LiME not found — missing build tools[/bold yellow]\n\n"
-                    "Install build prerequisites:\n"
-                    "  [cyan]sudo pacman -S git base-devel linux-hardened-headers[/cyan]\n\n"
-                    "Then build LiME:\n"
-                    "  [dim]git clone https://github.com/504ensicsLabs/LiME\n"
-                    "  make -C LiME/src[/dim]\n\n"
-                    "Or let ForensIQ build it automatically:\n"
-                    "  [cyan]sudo forensiq live --build-lime[/cyan]",
-                    border_style="yellow",
-                    padding=(0, 2),
-                )
-            )
-            return
-
-    # LiME is available — offer acquisition
-    console.print(f"[dim]Acquisition module:[/dim] [cyan]{reqs['lime_module_path']}[/cyan]\n")
-
-    # ── ISF check (Volatility 3 Linux symbol table) ───────────────────────────
-    if not reqs.get("linux_isf_available"):
-        if reqs.get("linux_isf_can_build"):
-            console.print(
-                "[yellow]Kernel ISF not built yet[/yellow] — Volatility 3 needs it to\n"
-                "analyze the LiME dump.\n"
-                "[dim]Uses BTF (/sys/kernel/btf/vmlinux) + System.map. Takes ~60s.[/dim]\n"
-            )
-            if _ask_confirm("Build kernel ISF (symbol table) now?", default=True):
-                from forensiq.acquisition.linux_isf import build_linux_isf
-
-                try:
-                    isf_path = build_linux_isf(
-                        progress_cb=lambda msg: console.print(f"  [dim]{msg}[/dim]")
-                    )
-                    console.print(f"\n[green]ISF built:[/green] {isf_path}\n")
-                    reqs["linux_isf_available"] = True
-                    reqs["linux_isf_path"] = str(isf_path)
-                except Exception as exc:
-                    err_console.print(f"[red]ISF build failed:[/red] {exc}")
-                    console.print(
-                        "[yellow]Analysis will proceed but Volatility 3 plugins may\n"
-                        "fail.[/yellow]\n"
-                        "[dim]Run manually: sudo forensiq live --build-isf[/dim]"
-                    )
-        else:
-            console.print(
-                "[yellow]Kernel ISF not available.[/yellow] Volatility 3 Linux analysis may fail.\n"
-                "[dim]Build requires: BTF (/sys/kernel/btf/vmlinux) + System.map + Go +\n"
-                "dwarf2json[/dim]"
-            )
-
-    if not reqs["has_root"]:
-        console.print(
-            "[red]Root privileges required for LiME.[/red]\n"
-            "Re-launch with: [cyan]sudo forensiq menu[/cyan]"
-        )
-        return
-
-    console.print(
-        Panel(
-            "[bold yellow]Security notice[/bold yellow]\n\n"
-            "LiME will read ALL physical memory from the running kernel and write it to disk.\n"
-            "The resulting file contains sensitive data: credentials, encryption keys, process\n"
-            "memory, and kernel internals. Treat the dump file as a high-confidentiality\n"
-            "artifact.\n\n"
-            "[dim]Ensure the output directory is not world-readable and is stored securely.[/dim]",
-            border_style="yellow",
-            padding=(0, 1),
-        )
-    )
-    if not _ask_confirm(
-        "Proceed with live memory acquisition?",
-        default=False,
-    ):
-        return
-
-    output_dir_raw = _ask_text("Output directory for reports:", default="./reports")
-    output_dir = (
-        Path(output_dir_raw).expanduser().resolve() if output_dir_raw else Path("./reports")
-    )
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    lime_dump_path = output_dir / "live_memory.lime"
-
-    no_yara = not _ask_confirm("Generate YARA rules via Ollama?", default=False)
-
-    _separator()
-    console.print("[bold cyan]Acquiring live memory via LiME[/bold cyan]")
-    console.print(f"  [dim]Output:[/dim] {lime_dump_path}")
-    console.print("  [dim]RAM   :[/dim] this may take several minutes depending on total memory")
-    console.print()
-
-    from forensiq.acquisition.live_memory import find_lime_module
-
-    lime_module_path = find_lime_module()
-    if lime_module_path is None:
-        err_console.print("[red]LiME module disappeared — cannot proceed.[/red]")
-        return
-
-    try:
-        dump_path = acquire_lime_dump(
-            output_path=lime_dump_path,
-            lime_module=lime_module_path,
-        )
-    except (LiveMemoryError, PermissionError) as exc:
-        err_console.print(f"\n[red]LiME acquisition failed:[/red] {exc}")
-        return
-
-    size_mb = dump_path.stat().st_size / 1_048_576
-    console.print(f"[green]Memory dump acquired[/green]  {size_mb:.0f} MB  ->  {dump_path}")
-    console.print()
-
-    _run_live_pipeline(dump_path, output_dir, no_yara=no_yara)
-
-
-def _run_live_kcore(reqs: dict[str, Any]) -> None:
-    """Run live analysis using /proc/kcore (called when kcore is ready)."""
-    console.print(
-        Panel(
-            "[bold yellow]Security notice[/bold yellow]\n\n"
-            "/proc/kcore exposes all physical memory of the running kernel as an ELF core file.\n"
-            "The analysis report will contain sensitive kernel and process data.\n\n"
-            "[dim]Ensure the output directory is not world-readable and is stored securely.[/dim]",
-            border_style="yellow",
-            padding=(0, 1),
-        )
-    )
-    if not _ask_confirm(
-        "Proceed with live analysis via /proc/kcore?",
-        default=False,
-    ):
-        return
-
-    output_dir_raw = _ask_text("Output directory for reports:", default="./reports")
-    output_dir = (
-        Path(output_dir_raw).expanduser().resolve() if output_dir_raw else Path("./reports")
-    )
-    no_yara = not _ask_confirm("Generate YARA rules via Ollama?", default=False)
-
-    from forensiq.acquisition.live_memory import LiveMemoryError, get_kcore_path
-
-    try:
-        dump_path = get_kcore_path()
-    except LiveMemoryError as exc:
-        err_console.print(f"[red]Failed to access /proc/kcore:[/red] {exc}")
-        return
-
-    _separator()
-    console.print("[bold cyan]Starting live analysis via /proc/kcore[/bold cyan]\n")
-    result = _run_pipeline_with_progress(
-        dump_path=dump_path,
-        output_dir=output_dir,
-        threshold=None,
-        generate_yara=not no_yara,
-        force_reanalyze=True,
-    )
-    if result is not None and result.report is not None:
-        _separator()
-        _print_report_summary(result.report)
-
-
 def _run_pipeline_with_progress(
     dump_path: Path,
     output_dir: Path,
@@ -608,6 +371,7 @@ def _run_pipeline_with_progress(
         "running": "[cyan]running[/cyan]",
         "done": "[green]done   [/green]",
         "skip": "[dim]skipped[/dim]",
+        "failed": "[red]failed [/red]",
     }
 
     def _render() -> Table:
@@ -660,12 +424,45 @@ def _run_pipeline_with_progress(
                     else f"{cnt} MITRE techniques"
                 )
 
+    # When the pipeline finds a prior analysis of the same dump SHA-256, show
+    # the cached summary and ask whether to re-run from scratch. Accepting the
+    # cached result returns a PipelineResult with no report object — the caller
+    # must recognise that as a success, not a failure.
+    def _on_cached_result(cached: dict[str, Any]) -> bool:
+        _print_cached_analysis_info(cached)
+        if force_reanalyze:
+            console.print("[yellow]Force re-analysis enabled — proceeding.[/yellow]")
+            return True
+        return _ask_confirm(
+            "This dump has been analyzed before. Run a full re-analysis?",
+            default=False,
+        )
+
+    # Mirrors the stage table as the pipeline progresses.  `live` is bound
+    # later inside the Live context below; as a free variable it resolves at
+    # call time, which is always after the context is entered.
+    def _callback(stage: str, data: object) -> None:
+        _on_stage(stage, data)
+        if stage == "classification":
+            stage_status["extraction"] = "done"
+            stage_status["classification"] = "done"
+            stage_status["detectors"] = "running"
+        elif stage == "detectors":
+            stage_status["detectors"] = "done"
+            stage_status["yara" if generate_yara else "report"] = "running"
+        elif stage == "yara":
+            stage_status["yara"] = "done"
+            stage_status["report"] = "running"
+        live.update(_render())
+
     pipeline = AnalysisPipeline(
         show_progress=False,
         generate_yara=generate_yara,
         generate_html=True,
         generate_json=True,
         force_reanalyze=force_reanalyze,
+        on_cached_result=_on_cached_result,
+        on_stage_complete=_callback,
     )
 
     console.print("[bold]Analysis pipeline[/bold]")
@@ -685,22 +482,6 @@ def _run_pipeline_with_progress(
         try:
             with Live(_render(), console=console, refresh_per_second=4, transient=True) as live:
 
-                def _callback(stage: str, data: object) -> None:
-                    _on_stage(stage, data)
-                    if stage == "classification":
-                        stage_status["extraction"] = "done"
-                        stage_status["classification"] = "done"
-                        stage_status["detectors"] = "running"
-                    elif stage == "detectors":
-                        stage_status["detectors"] = "done"
-                        stage_status["yara" if generate_yara else "report"] = "running"
-                    elif stage == "yara":
-                        stage_status["yara"] = "done"
-                        stage_status["report"] = "running"
-                    live.update(_render())
-
-                pipeline._on_stage_complete = _callback
-
                 result = asyncio.run(
                     pipeline.run(
                         dump_path=dump_path,
@@ -716,7 +497,24 @@ def _run_pipeline_with_progress(
                     if not generate_yara:
                         stage_status["yara"] = "skip"
                         stage_detail["yara"] = "disabled (--no-yara)"
+                elif result.exit_code in (0, 1):
+                    # Cached result accepted (no report object, valid exit code)
+                    # — reflect that in the table instead of leaving the
+                    # extraction stage hanging as "running".
+                    for k in stage_status:
+                        stage_status[k] = "done"
+                    stage_detail["extraction"] = "cached result accepted"
+                    stage_status["yara"] = "skip"
+                    stage_detail["yara"] = "not re-run (cached)"
                     stage_status["report"] = "done"
+                else:
+                    # Genuine failure (exit_code 2/3) — do not pretend it was a
+                    # cached hit; mark the failed stage so the table is honest.
+                    for k in stage_status:
+                        if stage_status[k] == "running":
+                            stage_status[k] = "failed"
+                    if result.error:
+                        stage_detail["extraction"] = result.error[:60]
                 live.update(_render())
         finally:
             # Restore the root log level regardless of pipeline outcome.
@@ -727,24 +525,20 @@ def _run_pipeline_with_progress(
     console.print(_render())
     console.print()
 
-    if result is None or result.report is None:
+    if result is None:
+        console.print("[red]Analysis failed — no report generated.[/red]")
+        return None
+
+    if result.report is None and result.exit_code in (0, 1):
+        # Cached result accepted: the pipeline returned early with no report
+        # object but a valid exit code — treat it as a successful (reused) run.
+        console.print("[green]Using previously cached analysis result.[/green]")
+        return result
+
+    if result.report is None:
         console.print("[red]Analysis failed — no report generated.[/red]")
         return None
     return result
-
-
-def _run_live_pipeline(dump_path: Path, output_dir: Path, *, no_yara: bool) -> None:
-    """Wrapper kept for LiME acquisition path."""
-    result = _run_pipeline_with_progress(
-        dump_path=dump_path,
-        output_dir=output_dir,
-        threshold=None,
-        generate_yara=not no_yara,
-        force_reanalyze=True,
-    )
-    if result is not None and result.report is not None:
-        _separator()
-        _print_report_summary(result.report)
 
 
 def _menu_diff() -> None:
@@ -769,10 +563,7 @@ def _menu_diff() -> None:
     if after is None:
         return
 
-    output_dir_raw = _ask_text("Output directory:", default="./reports")
-    output_dir = (
-        Path(output_dir_raw).expanduser().resolve() if output_dir_raw else Path("./reports")
-    )
+    output_dir = _ask_output_dir("Output directory:", default="./reports")
 
     _separator()
     console.print("[bold cyan]Comparing dumps…[/bold cyan]")
@@ -857,7 +648,8 @@ def _menu_history() -> None:
     for i, row in enumerate(analyses, 1):
         threat_level = row.get("threat_level", "unknown")
         # threat_level not stored in DB — derive from malicious_count
-        mal = int(row.get("malicious_count", 0))
+        raw_mal = row.get("malicious_count")
+        mal = int(raw_mal) if raw_mal is not None else 0
         if mal > 5:
             threat_level = "critical"
         elif mal > 0:
@@ -1043,3 +835,9 @@ def run_menu() -> None:
                 err_console.print(f"\n[red]Error:[/red] {exc}")
         else:
             console.print(f"[yellow]Unknown action:[/yellow] {choice}")
+
+
+# Imported last to avoid a circular import: menu_live reuses helpers from this
+# module (console, prompts, _run_pipeline_with_progress), so it must be loaded
+# after those names exist.
+from forensiq.tui.menu_live import _menu_live  # noqa: E402  (bottom import)

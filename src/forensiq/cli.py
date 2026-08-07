@@ -75,7 +75,7 @@ def analyze(
         writable=True,
         resolve_path=True,
     ),
-    threshold: float = typer.Option(
+    threshold: float | None = typer.Option(
         None,
         "--threshold",
         "-t",
@@ -230,7 +230,7 @@ def analyze(
     if result.exit_code == 3 or result.degraded_reason:
         err_console.print(
             "[yellow]Warning:[/yellow] Analysis completed but ML classification"
-            " was NOT applied — results are degraded.[/yellow]"
+            " was NOT applied — results are degraded."
         )
         err_console.print(f"[yellow]          {result.degraded_reason}[/yellow]")
         err_console.print(
@@ -248,6 +248,10 @@ def analyze(
     if report is None:
         err_console.print("[red]Error:[/red] No report generated.")
         raise typer.Exit(code=2)
+
+    # ── Surface non-fatal write warnings ───────────────────────────────────────
+    for warning in getattr(result, "warnings", []):
+        err_console.print(f"[yellow]Warning:[/yellow] {warning}")
 
     _print_summary(report, result)
 
@@ -566,8 +570,6 @@ def train(
         raise typer.Exit(code=2) from exc
 
     # Patch sys.argv and call training main
-    import sys
-
     original_argv = sys.argv
     sys.argv = [
         "forensiq-train",
@@ -614,7 +616,6 @@ def check() -> None:
     configure_logging(log_level="WARNING", log_format="console")
 
     import subprocess
-    import sys as _sys
 
     from forensiq.config.settings import get_settings
 
@@ -646,8 +647,8 @@ def check() -> None:
         table.add_row(name, "[yellow]WARN[/yellow]", detail)
 
     # Python version
-    py_version = f"{_sys.version_info.major}.{_sys.version_info.minor}.{_sys.version_info.micro}"
-    py_ok = _sys.version_info >= (3, 12)
+    py_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    py_ok = sys.version_info >= (3, 12)
     add_row("Python", py_ok, f"Python {py_version} {'(OK)' if py_ok else '(requires 3.12+)'}")
 
     # Volatility 3
@@ -842,7 +843,7 @@ def live(
         "-o",
         help="Output directory for the live analysis report.",
     ),
-    threshold: float = typer.Option(
+    threshold: float | None = typer.Option(
         None,
         "--threshold",
         help="Threat score threshold [0.0, 1.0]. Defaults to FORENSIQ_THREAT_THRESHOLD env var.",
@@ -1344,10 +1345,8 @@ def version() -> None:
     except Exception:  # noqa: S110
         pass  # vol3 may not be installed; version display is optional
 
-    import sys as _sys
-
     python_version = (
-        f"{_sys.version_info.major}.{_sys.version_info.minor}.{_sys.version_info.micro}"
+        f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
     )
 
     model_path = settings.get_model_path()
