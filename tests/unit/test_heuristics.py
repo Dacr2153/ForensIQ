@@ -7,6 +7,7 @@ from forensiq.features.heuristics import (
     has_encoded_cmdline,
     is_system_path,
     parent_child_legit,
+    valid_parents_for,
 )
 
 
@@ -151,3 +152,24 @@ class TestParentChildLegitBoundary:
         # services.exe → svchost.exe is a well-known legitimate relationship
         result = parent_child_legit("services.exe", "svchost.exe")
         assert result is True
+
+
+class TestValidParentsFor:
+    def test_known_child_returns_inverted_parents(self) -> None:
+        # Inverts LEGITIMATE_PARENT_CHILD: smss → {system, smss}
+        parents = valid_parents_for("smss.exe")
+        assert "system" in parents
+
+    def test_child_with_multiple_parents(self) -> None:
+        # csrss is a legitimate child of both smss and winlogon
+        parents = valid_parents_for("csrss.exe")
+        assert {"smss", "winlogon"} <= parents
+
+    def test_unknown_child_returns_empty(self) -> None:
+        assert valid_parents_for("totally_unknown.exe") == frozenset()
+
+    def test_consistent_with_parent_child_legit(self) -> None:
+        # Every (parent, child) pair implied by the inversion must be legit
+        for child in ("svchost.exe", "lsass.exe", "explorer.exe"):
+            for parent in valid_parents_for(child):
+                assert parent_child_legit(f"{parent}.exe", child) is True

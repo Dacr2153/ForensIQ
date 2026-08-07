@@ -18,6 +18,11 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+# ─── Suspicious Threshold ─────────────────────────────────────────────────────
+# Threat score at or above which a non-malicious process is reported as
+# "suspicious" (below the default 0.65 malicious cut-off, but clearly elevated).
+SUSPICIOUS_THRESHOLD: float = 0.35
+
 # ─── Known Windows System Directories ────────────────────────────────────────
 # Normalized to lowercase Windows paths (backslash normalized to forward slash).
 # These are the directories where legitimate Windows system processes run.
@@ -112,7 +117,7 @@ def is_system_path(image_file_name: str) -> bool:
 # Names are lowercase, no extension. This is not exhaustive but covers
 # the most common Windows process relationships.
 # Violations indicate process masquerading (MITRE T1036) or injection.
-_LEGITIMATE_PARENT_CHILD: dict[str, frozenset[str]] = {
+LEGITIMATE_PARENT_CHILD: dict[str, frozenset[str]] = {
     "system": frozenset({"smss"}),
     "smss": frozenset({"csrss", "winlogon", "wininit", "smss"}),
     "wininit": frozenset({"services", "lsass", "lsm"}),
@@ -180,6 +185,25 @@ _LEGITIMATE_PARENT_CHILD: dict[str, frozenset[str]] = {
 _NO_CHILD_PROCESSES: frozenset[str] = frozenset({"lsass", "csrss", "lsm"})
 
 
+def valid_parents_for(child_name: str) -> frozenset[str]:
+    """Return the set of legitimate parent stems for a child process stem.
+
+    Inverts :data:`LEGITIMATE_PARENT_CHILD` (parent → children) so detectors
+    can answer "which parents may spawn this child?" from the same single
+    source of truth, preventing the two views from drifting apart.
+
+    Args:
+        child_name: Child process name (stem or full name with extension).
+
+    Returns:
+        Frozenset of valid parent stems. Empty set if the child is unknown.
+    """
+    stem = _get_process_stem(child_name)
+    return frozenset(
+        parent for parent, children in LEGITIMATE_PARENT_CHILD.items() if stem in children
+    )
+
+
 def _get_process_stem(name: str) -> str:
     """Return lowercase name without extension."""
 
@@ -218,7 +242,7 @@ def parent_child_legit(parent_name: str, child_name: str) -> bool:
         return False
 
     # Check against known legitimate relationships
-    allowed_children = _LEGITIMATE_PARENT_CHILD.get(parent_stem)
+    allowed_children = LEGITIMATE_PARENT_CHILD.get(parent_stem)
     if allowed_children is None:
         # Unknown parent — assume legitimate (reduces false positives for 3rd-party apps)
         return True
