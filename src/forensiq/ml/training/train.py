@@ -23,6 +23,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -42,6 +44,12 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import train_test_split
 from xgboost import XGBClassifier
+
+from forensiq.ml.base import isolation_path
+from forensiq.models.features import ProcessFeatureVector
+
+# Canonical feature order — single source of truth lives in ProcessFeatureVector.
+FEATURE_NAMES: list[str] = ProcessFeatureVector.FEATURE_NAMES
 
 # ─── CIC-MalMem2022 → ForensIQ feature mapping ───────────────────────────────
 # Maps each of our 20 FEATURE_NAMES to the best available dataset column.
@@ -87,30 +95,23 @@ FEATURE_TO_DATASET_COL: dict[str, str | None] = {
     "time_delta_from_parent_seconds": None,  # not in dataset → defaults to 0.0
 }
 
-# FEATURE_NAMES in canonical order (must match ProcessFeatureVector.to_numpy_row())
-FEATURE_NAMES: list[str] = [
-    "process_name_entropy",
-    "path_entropy",
-    "path_depth",
-    "is_system_path",
-    "parent_child_legit",
-    "dll_count",
-    "suspicious_dll_count",
-    "has_network_connection",
-    "network_connection_count",
-    "external_connection_count",
-    "malfind_hits",
-    "vad_rwx_count",
-    "thread_count",
-    "handle_count",
-    "has_encoded_cmdline",
-    # New v2 features
-    "vad_execute_write_page_count",
-    "parent_name_mismatch",
-    "thread_start_in_heap",
-    "import_table_entropy",
-    "time_delta_from_parent_seconds",
-]
+# FEATURE_NAMES is imported from ProcessFeatureVector.FEATURE_NAMES (single source).
+# A key for every canonical feature must exist in the mapping below; missing keys
+# raise at import time so a feature-vector change can never silently train with
+# fewer columns than inference expects.
+_missing = [f for f in FEATURE_NAMES if f not in FEATURE_TO_DATASET_COL]
+_extra = [k for k in FEATURE_TO_DATASET_COL if k not in FEATURE_NAMES]
+if _missing or _extra:
+    raise RuntimeError(
+        "FEATURE_TO_DATASET_COL out of sync with ProcessFeatureVector.FEATURE_NAMES "
+        f"(missing={_missing}, extra={_extra})"
+    )
+
+# Schema hash: derived from the ordered feature names so the classifier can
+# verify a model was trained on exactly the same feature schema.
+SCHEMA_HASH: str = hashlib.sha256(
+    "\n".join(FEATURE_NAMES).encode("utf-8")
+).hexdigest()
 
 # Target column name in the dataset
 TARGET_COLUMN = "Class"
@@ -237,30 +238,6 @@ def load_dataset(data_path: Path) -> tuple[pd.DataFrame, pd.Series]:
     return X, labels
 
 
-def _isolation_output_path(model_output: Path) -> Path:
-    """Derive the IsolationForest output path from the classifier model path.
-
-    Ensures the isolation model never collides with the classifier model even
-    when the classifier uses a custom filename (the old ``.replace`` approach
-    only worked for the default ``forensiq_model.joblib`` name and silently
-    overwrote the classifier with an IsolationForest otherwise).
-
-    Args:
-        model_output: Path the calibrated classifier is saved to.
-
-    Returns:
-        Companion ``<stem>_isolation.joblib`` path for the IsolationForest.
-    """
-    stem = model_output.stem
-    if stem.endswith("_model"):
-        iso_stem = stem[: -len("_model")] + "_isolation"
-    elif stem.endswith("_isolation"):
-        iso_stem = stem
-    else:
-        iso_stem = f"{stem}_isolation"
-    return model_output.with_name(f"{iso_stem}.joblib")
-
-
 def train_model(
     X_train: pd.DataFrame,
     y_train: pd.Series,
@@ -337,6 +314,15 @@ def evaluate_model(
     return metrics
 
 
+def _file_sha256(path: Path) -> str:
+    """Stream the SHA-256 digest of a file without loading it into memory."""
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def save_model(
     model: CalibratedClassifierCV,
     output_path: Path,
@@ -356,14 +342,14 @@ def save_model(
     print(f"Model saved: {output_path}")
 
     # Save metadata alongside the model
-    import json
-
     metadata = {
         "version": "1.0.0",
         "trained_at": datetime.now(tz=UTC).isoformat(),
         "dataset": "CIC-MalMem2022",
         "features_used": feature_cols,
         "n_features": len(feature_cols),
+        "feature_schema_hash": SCHEMA_HASH,
+        "model_sha256": _file_sha256(output_path),
         "xgboost_params": XGBOOST_PARAMS,
         "metrics": metrics,
     }
@@ -434,7 +420,7 @@ def main() -> int:
     save_model(model, args.output, metrics, FEATURE_NAMES)
 
     # ── Train IsolationForest on benign samples only ──────────────────────────
-    iso_output = _isolation_output_path(args.output)
+    iso_output = isolation_path(args.output)
     print("\nTraining IsolationForest on benign samples (unsupervised anomaly detector)...")
     # Use all benign training samples for IsolationForest — it learns the normal profile
     X_benign = X_train[y_train == 0]
@@ -451,6 +437,15 @@ def main() -> int:
     )
     iso_model.fit(X_benign)
     print(f"  IsolationForest trained. Saving to: {iso_output}")
+
+    # Fixed reference bounds for inference-time normalization. Computed over the
+    # benign training samples ("normal profile") so score normalization is
+    # stable and batch-independent — a per-batch min/max at inference would make
+    # the same process score differently depending on which other processes were
+    # in the batch.
+    benign_scores = iso_model.score_samples(X_benign)
+    iso_ref_min = float(benign_scores.min())
+    iso_ref_max = float(benign_scores.max())
 
     # Evaluate: benign samples should have high scores, malicious low
     X_test_all = X_test.copy()
@@ -472,16 +467,18 @@ def main() -> int:
     print(f"  IsolationForest saved: {iso_output}")
 
     # Save IsolationForest metadata
-    import json
-
     iso_metadata = {
         "version": "1.0.0",
         "trained_at": datetime.now(tz=UTC).isoformat(),
         "dataset": "CIC-MalMem2022 (benign samples only)",
         "features_used": FEATURE_NAMES,
         "n_features": len(FEATURE_NAMES),
+        "feature_schema_hash": SCHEMA_HASH,
+        "model_sha256": _file_sha256(iso_output),
         "n_training_samples": len(X_benign),
         "contamination": 0.05,
+        "score_reference_min": iso_ref_min,
+        "score_reference_max": iso_ref_max,
         "evaluation": {
             "precision": float(iso_precision),
             "recall": float(iso_recall),

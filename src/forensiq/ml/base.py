@@ -25,6 +25,28 @@ from pathlib import Path
 from forensiq.models.features import ProcessFeatureVector
 
 
+def isolation_path(model_path: Path) -> Path:
+    """Derive the companion IsolationForest path for a classifier model path.
+
+    Ensures the isolation model never collides with the classifier model even
+    when the classifier uses a custom filename.
+
+    Args:
+        model_path: Path to the calibrated classifier model.
+
+    Returns:
+        Companion ``<stem>_isolation.joblib`` path for the IsolationForest.
+    """
+    stem = model_path.stem
+    if stem.endswith("_model"):
+        iso_stem = stem[: -len("_model")] + "_isolation"
+    elif stem.endswith("_isolation"):
+        iso_stem = stem
+    else:
+        iso_stem = f"{stem}_isolation"
+    return model_path.with_name(f"{iso_stem}.joblib")
+
+
 class BaseClassifier(abc.ABC):
     """Abstract interface for per-process malware classifiers.
 
@@ -100,8 +122,6 @@ class BaseClassifier(abc.ABC):
         Returns:
             Annotated copy with ``threat_score`` and ``is_malicious`` set.
         """
-        from forensiq.models.features import ProcessFeatureVector
-
         min_processes = 3
         dummy = ProcessFeatureVector(pid=0, name="<placeholder>", ppid=0)
         padding = [dummy] * (min_processes - 1)

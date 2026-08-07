@@ -5,7 +5,8 @@ Provides feature importance attribution for each process prediction using
 SHAP (SHapley Additive exPlanations) values.
 
 SHAP values explain WHY the model assigned a particular threat score,
-showing which of the 15 features contributed most to the decision.
+showing which of the features (see ProcessFeatureVector.FEATURE_NAMES)
+contributed most to the decision.
 This is critical for forensic analysts who need to understand and validate
 the model's predictions.
 

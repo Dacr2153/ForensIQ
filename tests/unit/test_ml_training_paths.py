@@ -11,47 +11,32 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from forensiq.ml.classifier import _isolation_model_path
-from forensiq.ml.training.train import _isolation_output_path
+from forensiq.ml.base import isolation_path
 
 
 class TestIsolationOutputPath:
     def test_default_model_name(self) -> None:
-        out = _isolation_output_path(Path("ml/data/forensiq_model.joblib"))
+        out = isolation_path(Path("ml/data/forensiq_model.joblib"))
         assert out.name == "forensiq_isolation.joblib"
 
     def test_custom_model_name_appends_isolation(self) -> None:
-        out = _isolation_output_path(Path("/tmp/smoke_model.joblib"))
+        out = isolation_path(Path("/tmp/smoke_model.joblib"))
         assert out.name == "smoke_isolation.joblib"
 
     def test_custom_name_without_model_suffix(self) -> None:
-        out = _isolation_output_path(Path("/tmp/custom.joblib"))
+        out = isolation_path(Path("/tmp/custom.joblib"))
         assert out.name == "custom_isolation.joblib"
 
     def test_never_collides_with_classifier_path(self) -> None:
         classifier = Path("/tmp/whatever_model.joblib")
-        iso = _isolation_output_path(classifier)
+        iso = isolation_path(classifier)
         assert iso != classifier
         assert iso.parent == classifier.parent
 
     def test_already_isolation_name_is_kept(self) -> None:
-        out = _isolation_output_path(Path("/tmp/foo_isolation.joblib"))
+        out = isolation_path(Path("/tmp/foo_isolation.joblib"))
         assert out.name == "foo_isolation.joblib"
 
-
-class TestIsolationModelLookup:
-    def test_default_name(self) -> None:
-        p = _isolation_model_path(Path("ml/data/forensiq_model.joblib"))
-        assert p.name == "forensiq_isolation.joblib"
-
-    def test_custom_name(self) -> None:
-        p = _isolation_model_path(Path("/tmp/smoke_model.joblib"))
-        assert p.name == "smoke_isolation.joblib"
-
     def test_plain_name(self) -> None:
-        p = _isolation_model_path(Path("/x/custom.joblib"))
+        p = isolation_path(Path("/x/custom.joblib"))
         assert p.name == "custom_isolation.joblib"
-
-    def test_matches_training_derivation(self) -> None:
-        classifier = Path("/tmp/model_X.joblib")
-        assert _isolation_model_path(classifier) == _isolation_output_path(classifier)

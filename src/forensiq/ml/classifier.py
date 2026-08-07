@@ -19,6 +19,8 @@ Usage:
 
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +28,7 @@ import joblib
 import numpy as np
 
 from forensiq.config.settings import get_settings
-from forensiq.ml.base import BaseClassifier
+from forensiq.ml.base import BaseClassifier, isolation_path
 from forensiq.models.features import ProcessFeatureVector
 from forensiq.utils.exceptions import (
     ClassificationError,
@@ -41,28 +43,76 @@ log = get_logger(__name__)
 # Below this, the classifier may produce unreliable results.
 _MIN_PROCESSES_FOR_CLASSIFICATION = 3
 
+# Schema hash of the canonical FEATURE_NAMES order. Models whose metadata record
+# a feature_schema_hash are rejected on load if this does not match, so a
+# reordered/renamed feature vector can never silently desync from the model.
+_SCHEMA_HASH: str = hashlib.sha256(
+    "\n".join(ProcessFeatureVector.FEATURE_NAMES).encode("utf-8")
+).hexdigest()
 
-def _isolation_model_path(model_path: Path) -> Path:
-    """Derive the companion IsolationForest path for a classifier model path.
 
-    Mirrors ``_isolation_output_path`` in the training script so inference
-    finds the same companion file the trainer produces, even for custom
-    classifier filenames.
+def _file_sha256(path: Path) -> str:
+    """Stream the SHA-256 digest of a file without loading it into memory."""
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _verify_model_integrity(path: Path) -> dict[str, Any] | None:
+    """Verify a joblib model file against its companion metadata JSON.
+
+    ``joblib.load`` executes arbitrary code (pickle). A model file delivered
+    with a case is therefore an RCE vector, so we refuse to load a model whose
+    SHA-256 does not match the hash recorded by the trainer at ``model_sha256``.
 
     Args:
-        model_path: Path to the calibrated classifier model.
+        path: Path to the ``*.joblib`` model file.
 
     Returns:
-        Companion ``<stem>_isolation.joblib`` path for the IsolationForest.
+        The metadata dict when present and verified, else ``None``.
+
+    Raises:
+        ClassificationError: If the metadata records a hash and it does not
+            match the on-disk model file.
     """
-    stem = model_path.stem
-    if stem.endswith("_model"):
-        iso_stem = stem[: -len("_model")] + "_isolation"
-    elif stem.endswith("_isolation"):
-        iso_stem = stem
-    else:
-        iso_stem = f"{stem}_isolation"
-    return model_path.with_name(f"{iso_stem}.joblib")
+    meta_path = path.with_suffix(".json")
+    if not meta_path.is_file():
+        log.warning(
+            "No metadata JSON — model integrity cannot be verified",
+            model_path=str(path),
+        )
+        return None
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        log.warning(
+            "Unreadable model metadata — integrity cannot be verified",
+            model_path=str(path),
+            error=str(exc),
+        )
+        return None
+
+    expected = meta.get("model_sha256")
+    if not expected:
+        log.warning(
+            "Model metadata has no model_sha256 — integrity cannot be verified",
+            model_path=str(path),
+        )
+        return meta
+
+    actual = _file_sha256(path)
+    if actual.lower() != str(expected).lower():
+        raise ClassificationError(
+            message=(
+                f"Model integrity check failed for {path}: SHA-256 mismatch — "
+                "refusing to load a possibly tampered or corrupted model"
+            ),
+            context={"model_path": str(path), "expected_sha256": str(expected)[:16]},
+        )
+    log.debug("Model integrity verified", model_path=str(path))
+    return meta
 
 
 class ForensiqClassifier(BaseClassifier):
@@ -84,6 +134,10 @@ class ForensiqClassifier(BaseClassifier):
         self._isolation_model: Any | None = None  # IsolationForest for zero-day detection
         self._model_path: Path = self._settings.get_model_path()
         self.threshold: float = self._settings.THREAT_THRESHOLD
+        # Fixed IsolationForest score normalization bounds, loaded from the
+        # isolation model's metadata at load_model() time.
+        self._iso_ref_min: float | None = None
+        self._iso_ref_max: float | None = None
         # Ensemble weights: XGBoost supervised + IsolationForest unsupervised
         self._xgb_weight: float = 0.6
         self._isolation_weight: float = 0.4
@@ -115,6 +169,31 @@ class ForensiqClassifier(BaseClassifier):
         if not path.is_file():
             raise ModelNotLoadedError(model_path=path_str)
 
+        # Verify the model against its metadata hash before unpickling.
+        meta = _verify_model_integrity(path)
+        if meta is not None and meta.get("n_features") != len(
+            ProcessFeatureVector.FEATURE_NAMES
+        ):
+            raise ClassificationError(
+                message=(
+                    f"Model was trained on {meta.get('n_features')} features but "
+                    f"inference expects {len(ProcessFeatureVector.FEATURE_NAMES)} "
+                    f"({path_str}) — refusing to load a schema-mismatched model"
+                ),
+                context={"model_path": path_str},
+            )
+        # If the trainer recorded a schema hash, it must match ours — guards
+        # against a model trained on reordered/renamed features of the same count.
+        recorded_schema = meta.get("feature_schema_hash") if meta is not None else None
+        if recorded_schema and recorded_schema != _SCHEMA_HASH:
+            raise ClassificationError(
+                message=(
+                    f"Model feature schema hash mismatch ({path_str}) — "
+                    "refusing to load a model trained on a different feature schema"
+                ),
+                context={"model_path": path_str},
+            )
+
         try:
             self._model = joblib.load(path)
             log.info(
@@ -122,6 +201,8 @@ class ForensiqClassifier(BaseClassifier):
                 model_path=path_str,
                 model_type=type(self._model).__name__,
             )
+        except ClassificationError:
+            raise
         except Exception as exc:
             raise ClassificationError(
                 message=f"Failed to load model from {path_str}: {exc}",
@@ -129,21 +210,42 @@ class ForensiqClassifier(BaseClassifier):
             ) from exc
 
         # Try to load the IsolationForest model (same dir, *_isolation.joblib)
-        isolation_path = _isolation_model_path(path)
-        if not isolation_path.exists():
-            # Fallback: look for any *_isolation*.joblib in the same directory
-            candidates = sorted(path.parent.glob("*isolation*.joblib"), reverse=True)
-            isolation_path = candidates[0] if candidates else isolation_path
-
-        if isolation_path.is_file():
+        iso_path = isolation_path(path)
+        if iso_path.is_file():
             try:
-                self._isolation_model = joblib.load(isolation_path)
-                log.info("IsolationForest model loaded", path=str(isolation_path))
+                iso_meta = _verify_model_integrity(iso_path)
+                self._isolation_model = joblib.load(iso_path)
+                self._load_iso_reference_bounds(iso_meta)
+                log.info("IsolationForest model loaded", path=str(iso_path))
+            except ClassificationError as exc:
+                log.warning(
+                    "IsolationForest model rejected (non-fatal)",
+                    error=str(exc),
+                    path=str(iso_path),
+                )
+                self._isolation_model = None
             except Exception as exc:
                 log.warning("IsolationForest model failed to load (non-fatal)", error=str(exc))
                 self._isolation_model = None
         else:
             log.info("No IsolationForest model found — ensemble will use XGBoost only")
+
+    def _load_iso_reference_bounds(self, meta: dict[str, Any] | None) -> None:
+        """Load the fixed IsolationForest normalization bounds from metadata.
+
+        Stored by the trainer as ``score_reference_min``/``score_reference_max``
+        (computed over the benign training profile). When absent, bounds stay
+        ``None`` and inference falls back to per-batch normalization.
+        """
+        self._iso_ref_min = None
+        self._iso_ref_max = None
+        if not isinstance(meta, dict):
+            return
+        lo, hi = meta.get("score_reference_min"), meta.get("score_reference_max")
+        if isinstance(lo, (int, float)) and isinstance(hi, (int, float)):
+            if hi > lo:
+                self._iso_ref_min = float(lo)
+                self._iso_ref_max = float(hi)
 
     def predict_batch(
         self,
@@ -178,6 +280,37 @@ class ForensiqClassifier(BaseClassifier):
 
         log.info("Classifying processes", count=len(vectors), threshold=self.threshold)
 
+        return self._predict_internal(vectors)
+
+    def predict_single(self, vector: ProcessFeatureVector) -> ProcessFeatureVector:
+        """Classify a single process feature vector.
+
+        Unlike :meth:`predict_batch`, this does not require a minimum number of
+        processes — no placeholder padding is needed, so the returned vector is
+        exactly the input vector annotated (never a padded dummy).
+
+        Args:
+            vector: Feature vector to classify.
+
+        Returns:
+            Annotated feature vector with threat_score and is_malicious.
+
+        Raises:
+            ModelNotLoadedError: If load_model() has not been called.
+        """
+        if not self.is_loaded:
+            raise ModelNotLoadedError(model_path=str(self._model_path))
+        return self._predict_internal([vector])[0]
+
+    def _predict_internal(
+        self,
+        vectors: list[ProcessFeatureVector],
+    ) -> list[ProcessFeatureVector]:
+        """Core classification logic shared by predict_batch and predict_single.
+
+        Assumes ``self._model`` is loaded. Does not enforce the minimum-process
+        guard (the public predict_batch does).
+        """
         # Build feature matrix: shape (N, 20)
         try:
             feature_matrix = np.stack(
@@ -218,14 +351,22 @@ class ForensiqClassifier(BaseClassifier):
         if self._isolation_model is not None:
             try:
                 raw_iso = self._isolation_model.score_samples(feature_matrix)
-                # Normalize: most negative maps to 1.0 (anomalous), 0+ maps to 0.0
-                # IsolationForest scores are typically in [-0.5, 0.5] range
-                iso_min = raw_iso.min()
-                iso_max = raw_iso.max()
-                if iso_max > iso_min:
-                    isolation_scores = 1.0 - (raw_iso - iso_min) / (iso_max - iso_min)
-                else:
-                    isolation_scores = np.zeros(len(vectors))
+                # Normalize with the FIXED reference bounds recorded at training
+                # time (over the benign "normal profile"). Fixed bounds keep
+                # scores comparable across runs; the old per-batch min/max made
+                # the same process score differently depending on batch content.
+                if self._iso_ref_min is not None and self._iso_ref_max is not None:
+                    span = self._iso_ref_max - self._iso_ref_min
+                    if span > 1e-12:
+                        isolation_scores = np.clip(
+                            1.0 - (raw_iso - self._iso_ref_min) / span, 0.0, 1.0
+                        )
+                # Fallback: normalize against this batch's own range.
+                if not np.any(isolation_scores):
+                    iso_min = raw_iso.min()
+                    iso_max = raw_iso.max()
+                    if iso_max > iso_min:
+                        isolation_scores = 1.0 - (raw_iso - iso_min) / (iso_max - iso_min)
             except Exception as exc:
                 log.warning("IsolationForest scoring failed (using zeros)", error=str(exc))
 
@@ -264,24 +405,5 @@ class ForensiqClassifier(BaseClassifier):
             threshold=self.threshold,
             ensemble=use_ensemble,
         )
+
         return annotated
-
-    def predict_single(self, vector: ProcessFeatureVector) -> ProcessFeatureVector:
-        """Classify a single process feature vector.
-
-        Convenience wrapper around predict_batch for single-process use.
-        NOTE: Less efficient than batch prediction for multiple processes.
-
-        Args:
-            vector: Feature vector to classify.
-
-        Returns:
-            Annotated feature vector with threat_score and is_malicious.
-        """
-        dummy = ProcessFeatureVector(pid=0, name="<placeholder>", ppid=0)
-        padding = [dummy] * (_MIN_PROCESSES_FOR_CLASSIFICATION - 1)
-        results = self.predict_batch([vector, *padding])
-        for result in results:
-            if result.pid == vector.pid:
-                return result
-        return results[0]
