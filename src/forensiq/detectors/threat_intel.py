@@ -136,11 +136,7 @@ class ThreatIntelDetector(BaseDetector):
         Only DLLs whose content hash is known (64 hex chars) are returned.
         No hash is ever derived from the path string.
         """
-        pid_to_name: dict[int, str] = {}
-        if extraction.process_tree:
-            pid_to_name = {
-                pid: proc.name for pid, proc in extraction.process_tree.flat_map.items()
-            }
+        pid_to_name = extraction.process_tree.name_map if extraction.process_tree else {}
 
         candidates: list[_Candidate] = []
         seen: set[str] = set()

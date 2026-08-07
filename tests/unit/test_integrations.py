@@ -118,6 +118,7 @@ class TestMalwareBazaarClient:
 
     @pytest.mark.asyncio
     async def test_lookup_hash_unknown_status(self):
+        """A non-"ok" status other than hash_not_found is an API failure → error."""
         mock_response = MagicMock()
         mock_response.raise_for_status.return_value = None
         mock_response.json.return_value = {"query_status": "something_weird"}
@@ -127,7 +128,7 @@ class TestMalwareBazaarClient:
         client._client.post = AsyncMock(return_value=mock_response)
 
         result = await client.lookup_hash("a" * 32)
-        assert result.verdict == "unknown"
+        assert result.verdict == "error"
 
     @pytest.mark.asyncio
     async def test_lookup_batch_returns_all_hashes(self):
