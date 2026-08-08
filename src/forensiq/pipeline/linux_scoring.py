@@ -12,9 +12,6 @@ from __future__ import annotations
 
 from forensiq.detectors.base import DetectorResult
 from forensiq.models.features import ProcessFeatureVector
-from forensiq.utils.logger import get_logger
-
-log = get_logger(__name__)
 
 _LINUX_HEURISTIC_SCORE: dict[str, float] = {
     "critical": 0.85,

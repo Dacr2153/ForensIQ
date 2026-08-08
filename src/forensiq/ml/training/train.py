@@ -113,9 +113,6 @@ SCHEMA_HASH: str = hashlib.sha256(
     "\n".join(FEATURE_NAMES).encode("utf-8")
 ).hexdigest()
 
-# Target column name in the dataset
-TARGET_COLUMN = "Class"
-
 # Label mapping: dataset class names → binary (0=benign, 1=malicious)
 BINARY_LABEL_MAP: dict[str, int] = {
     # CIC-MalMem2022 parquet uses "Benign" and "Malware"

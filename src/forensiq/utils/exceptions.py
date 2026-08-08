@@ -17,9 +17,7 @@ Hierarchy:
             ModelNotLoadedError
             InsufficientDataError
         YARAError                  — YARA generation/validation failures
-            YARAGenerationError
             YARACompilationError
-            YARAValidationError
         LLMError                   — Ollama/LLM communication failures
             OllamaConnectionError
             OllamaTimeoutError
@@ -196,17 +194,6 @@ class YARAError(ForensiqError):
     """Base class for YARA-related errors."""
 
 
-class YARAGenerationError(YARAError):
-    """Raised when the LLM fails to generate a parseable YARA rule."""
-
-    def __init__(self, process_name: str, reason: str, correlation_id: str = "") -> None:
-        super().__init__(
-            message=f"YARA generation failed for '{process_name}': {reason}",
-            correlation_id=correlation_id,
-            context={"process_name": process_name, "reason": reason},
-        )
-
-
 class YARACompilationError(YARAError):
     """Raised when yara-python fails to compile a generated rule.
 
@@ -233,10 +220,6 @@ class YARACompilationError(YARAError):
         )
         self.rule_name = rule_name
         self.compile_error = compile_error
-
-
-class YARAValidationError(YARAError):
-    """Raised when a compiled YARA rule fails its validation test."""
 
 
 # ─── LLM Errors ──────────────────────────────────────────────────────────────

@@ -309,58 +309,6 @@ class VADExtractor:
         )
         return malfind_by_pid
 
-    def extract_vad_for_pids(self, pids: set[int]) -> dict[int, list[VADEntry]]:
-        """Run windows.vadinfo and return only VAD entries for specified PIDs.
-
-        This is the selective VAD mode: runs vadinfo for all PIDs but filters
-        the results to only include entries for the given PID set. This avoids
-        the overhead of parsing thousands of entries for benign processes.
-
-        Args:
-            pids: Set of PIDs to include in results. All others are discarded.
-
-        Returns:
-            Dict mapping PID → list of VADEntry, filtered to requested PIDs.
-        """
-        if not pids:
-            return {}
-
-        log.info(
-            "Extracting VAD entries (selective)",
-            requested_pids=sorted(pids),
-        )
-        plugin = "linux.proc" if self._runner.is_linux else "windows.vadinfo"
-        try:
-            rows = self._runner.run_plugin(plugin)
-        except Exception as exc:
-            log.warning(f"{plugin} failed (selective mode)", error=str(exc))
-            return {}
-
-        vad_by_pid: dict[int, list[VADEntry]] = {}
-        skipped = 0
-        filtered_out = 0
-
-        for row in rows:
-            entry = self._row_to_vad_entry(row)
-            if entry is None:
-                skipped += 1
-                continue
-            if entry.pid not in pids:
-                filtered_out += 1
-                continue
-            vad_by_pid.setdefault(entry.pid, []).append(entry)
-
-        total = sum(len(v) for v in vad_by_pid.values())
-        log.info(
-            "Selective VAD extraction complete",
-            total=total,
-            requested_pids=len(pids),
-            pids_with_data=len(vad_by_pid),
-            filtered_out=filtered_out,
-            skipped=skipped,
-        )
-        return vad_by_pid
-
     async def extract_malfind_async(self) -> dict[int, list[MalfindRegion]]:
         """Async variant: run malfind plugin, with /proc fallback for Linux."""
         log.info("Extracting malfind regions (async)")
